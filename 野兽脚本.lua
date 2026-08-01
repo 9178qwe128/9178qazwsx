@@ -1,5 +1,5 @@
 --[[
-    🐾 野兽脚本 - 完整版
+    🐾 野兽脚本 - 完整版（带UI贴图）
 ]]
 
 local Players = game:GetService("Players")
@@ -8,8 +8,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 
--- ===== 图片素材URL =====
--- 把完整图片链接填在这里
+-- ===== 图片素材URL（填完整链接） =====
 local IMAGE_URL = "https://raw.githubusercontent.com/9178qwe128/9178qazwsx/main/image_download_1728782746726.jpg"
 
 -- ===== 卡密系统 =====
@@ -23,8 +22,6 @@ local ValidKeys = {
 local isVerified = false
 local verifyTime = 0
 local verifyDuration = 60
-local currentKey = ""
-local isExpired = false
 
 -- ===== 窗口设置 =====
 local WindowSettings = {
@@ -131,14 +128,24 @@ local mainFrame = nil
 local timerConnection = nil
 
 -- ============================================================
--- 检查卡密是否过期，过期则强制关闭
+-- 加载网络图片
+-- ============================================================
+local function loadImage(imageLabel)
+    if IMAGE_URL and IMAGE_URL ~= "" then
+        pcall(function()
+            imageLabel.Image = IMAGE_URL
+        end)
+    end
+end
+
+-- ============================================================
+-- 检查卡密是否过期
 -- ============================================================
 local function checkAndForceClose()
     if isVerified then
         local elapsed = tick() - verifyTime
         if elapsed >= verifyDuration then
             isVerified = false
-            isExpired = true
             if mainScreenGui then
                 mainScreenGui:Destroy()
                 mainScreenGui = nil
@@ -152,33 +159,43 @@ local function checkAndForceClose()
                 timerConnection:Disconnect()
                 timerConnection = nil
             end
+            -- 过期提示
             local notifyGui = Instance.new("ScreenGui")
             notifyGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
             notifyGui.Name = "ExpiredNotify"
             
             local notifyFrame = Instance.new("Frame")
-            notifyFrame.Size = UDim2.new(0, 400, 0, 120)
-            notifyFrame.Position = UDim2.new(0.5, -200, 0.5, -60)
+            notifyFrame.Size = UDim2.new(0, 400, 0, 140)
+            notifyFrame.Position = UDim2.new(0.5, -200, 0.5, -70)
             notifyFrame.BackgroundColor3 = Color3.fromRGB(30, 10, 25)
             notifyFrame.BackgroundTransparency = 0.1
             notifyFrame.BorderSizePixel = 2
             notifyFrame.BorderColor3 = Color3.fromRGB(255, 0, 0)
             notifyFrame.Parent = notifyGui
             
+            -- 过期图标
+            local icon = Instance.new("ImageLabel")
+            icon.Size = UDim2.new(0, 50, 0, 50)
+            icon.Position = UDim2.new(0.5, -25, 0, 10)
+            icon.BackgroundTransparency = 1
+            icon.ScaleType = Enum.ScaleType.Fit
+            icon.Parent = notifyFrame
+            loadImage(icon)
+            
             local notifyText = Instance.new("TextLabel")
-            notifyText.Size = UDim2.new(1, 0, 0, 50)
-            notifyText.Position = UDim2.new(0, 0, 0, 10)
-            notifyText.Text = "⏰ 卡密已过期！\n请重新输入卡密"
+            notifyText.Size = UDim2.new(1, 0, 0, 40)
+            notifyText.Position = UDim2.new(0, 0, 0, 60)
+            notifyText.Text = "⏰ 卡密已过期！"
             notifyText.TextColor3 = Color3.fromRGB(255, 0, 0)
             notifyText.TextXAlignment = Enum.TextXAlignment.Center
             notifyText.BackgroundTransparency = 1
             notifyText.Font = Enum.Font.GothamBold
-            notifyText.TextSize = 18
+            notifyText.TextSize = 20
             notifyText.Parent = notifyFrame
             
             local okBtn = Instance.new("TextButton")
             okBtn.Size = UDim2.new(0, 120, 0, 35)
-            okBtn.Position = UDim2.new(0.5, -60, 0, 70)
+            okBtn.Position = UDim2.new(0.5, -60, 0, 100)
             okBtn.Text = "✅ 重新验证"
             okBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
             okBtn.TextSize = 14
@@ -199,20 +216,6 @@ local function checkAndForceClose()
 end
 
 -- ============================================================
--- 加载图片素材
--- ============================================================
-local function loadImage(imageLabel)
-    if IMAGE_URL and IMAGE_URL ~= "" then
-        local success, result = pcall(function()
-            imageLabel.Image = IMAGE_URL
-        end)
-        if not success then
-            imageLabel.Image = ""
-        end
-    end
-end
-
--- ============================================================
 -- 创建主页面板
 -- ============================================================
 local function createHomePanel(parent)
@@ -220,6 +223,16 @@ local function createHomePanel(parent)
     local y = 5
     
     if checkAndForceClose() then return end
+    
+    -- 头部图片
+    local headerImage = Instance.new("ImageLabel")
+    headerImage.Size = UDim2.new(0, 380, 0, 80)
+    headerImage.Position = UDim2.new(0, 10, 0, y)
+    headerImage.BackgroundTransparency = 1
+    headerImage.ScaleType = Enum.ScaleType.Fit
+    headerImage.Parent = parent
+    loadImage(headerImage)
+    y = y + 88
     
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(0, 380, 0, 35)
@@ -1298,8 +1311,8 @@ local function createVerifyUI(callback)
     bg.Parent = verifyScreenGui
     
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 380, 0, 260)
-    frame.Position = UDim2.new(0.5, -190, 0.5, -130)
+    frame.Size = UDim2.new(0, 380, 0, 280)
+    frame.Position = UDim2.new(0.5, -190, 0.5, -140)
     frame.BackgroundColor3 = Color3.fromRGB(30, 10, 25)
     frame.BackgroundTransparency = 0.05
     frame.BorderSizePixel = 2
@@ -1308,18 +1321,18 @@ local function createVerifyUI(callback)
     frame.Draggable = true
     frame.Parent = verifyScreenGui
     
-    -- 图片显示
-    local imageLabel = Instance.new("ImageLabel")
-    imageLabel.Size = UDim2.new(0, 60, 0, 60)
-    imageLabel.Position = UDim2.new(0.5, -30, 0, 5)
-    imageLabel.BackgroundTransparency = 1
-    imageLabel.ScaleType = Enum.ScaleType.Fit
-    imageLabel.Parent = frame
-    loadImage(imageLabel)
+    -- 大图片显示
+    local bigImage = Instance.new("ImageLabel")
+    bigImage.Size = UDim2.new(0, 120, 0, 120)
+    bigImage.Position = UDim2.new(0.5, -60, 0, 5)
+    bigImage.BackgroundTransparency = 1
+    bigImage.ScaleType = Enum.ScaleType.Fit
+    bigImage.Parent = frame
+    loadImage(bigImage)
     
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 35)
-    title.Position = UDim2.new(0, 0, 0, 65)
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.Position = UDim2.new(0, 0, 0, 130)
     title.Text = "🔐 卡密验证"
     title.TextColor3 = Color3.fromRGB(255, 50, 150)
     title.TextXAlignment = Enum.TextXAlignment.Center
@@ -1330,7 +1343,7 @@ local function createVerifyUI(callback)
     
     local hint = Instance.new("TextLabel")
     hint.Size = UDim2.new(1, 0, 0, 25)
-    hint.Position = UDim2.new(0, 0, 0, 105)
+    hint.Position = UDim2.new(0, 0, 0, 165)
     hint.Text = "请输入卡密以使用脚本"
     hint.TextColor3 = Color3.fromRGB(200, 200, 220)
     hint.TextXAlignment = Enum.TextXAlignment.Center
@@ -1341,7 +1354,7 @@ local function createVerifyUI(callback)
     
     local input = Instance.new("TextBox")
     input.Size = UDim2.new(0, 250, 0, 40)
-    input.Position = UDim2.new(0.5, -125, 0, 140)
+    input.Position = UDim2.new(0.5, -125, 0, 195)
     input.PlaceholderText = "请输入卡密..."
     input.Text = ""
     input.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1354,7 +1367,7 @@ local function createVerifyUI(callback)
     
     local status = Instance.new("TextLabel")
     status.Size = UDim2.new(1, 0, 0, 25)
-    status.Position = UDim2.new(0, 0, 0, 190)
+    status.Position = UDim2.new(0, 0, 0, 240)
     status.Text = ""
     status.TextColor3 = Color3.fromRGB(255, 200, 50)
     status.TextXAlignment = Enum.TextXAlignment.Center
@@ -1365,7 +1378,7 @@ local function createVerifyUI(callback)
     
     local confirm = Instance.new("TextButton")
     confirm.Size = UDim2.new(0, 120, 0, 35)
-    confirm.Position = UDim2.new(0.5, -60, 0, 215)
+    confirm.Position = UDim2.new(0.5, -60, 0, 245)
     confirm.Text = "✅ 验证"
     confirm.TextColor3 = Color3.fromRGB(255, 255, 255)
     confirm.TextSize = 15
@@ -1377,9 +1390,7 @@ local function createVerifyUI(callback)
         local key = input.Text
         if ValidKeys[key] then
             isVerified = true
-            isExpired = false
             verifyTime = tick()
-            currentKey = key
             status.Text = "✅ 验证成功！"
             status.TextColor3 = Color3.fromRGB(0, 255, 0)
             task.wait(0.5)
@@ -1437,8 +1448,8 @@ local function loadMainUI()
     
     -- 标题栏小图标
     local titleIcon = Instance.new("ImageLabel")
-    titleIcon.Size = UDim2.new(0, 20, 0, 20)
-    titleIcon.Position = UDim2.new(0, 10, 0, 4)
+    titleIcon.Size = UDim2.new(0, 24, 0, 24)
+    titleIcon.Position = UDim2.new(0, 8, 0, 2)
     titleIcon.BackgroundTransparency = 1
     titleIcon.ScaleType = Enum.ScaleType.Fit
     titleIcon.Parent = titleBar
@@ -1446,7 +1457,7 @@ local function loadMainUI()
     
     local titleText = Instance.new("TextLabel")
     titleText.Size = UDim2.new(1, -50, 1, 0)
-    titleText.Position = UDim2.new(0, 35, 0, 0)
+    titleText.Position = UDim2.new(0, 38, 0, 0)
     titleText.Text = "🐾 野兽脚本"
     titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
     titleText.TextXAlignment = Enum.TextXAlignment.Left
