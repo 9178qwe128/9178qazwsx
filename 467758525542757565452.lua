@@ -1,11 +1,12 @@
 --[[
-    🐾 野兽脚本 - 完整版（带UI贴图）
+    🐾 野兽脚本 - 完整版（含自动出租车）
 ]]
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 -- ===== 图片素材URL =====
 local IMAGE_URL = "https://raw.githubusercontent.com/9178qwe128/9178qazwsx/main/image_download_1728782746726.jpg"
@@ -32,6 +33,15 @@ local WindowSettings = {
     maxHeight = 700
 }
 
+-- ===== 自动出租车变量 =====
+local taxiRunning = false
+local taxiThread = nil
+local orderCount = 0
+local teleportCount = 0
+local screenSize = workspace.CurrentCamera.ViewportSize
+local phoneX = screenSize.X * 0.85
+local phoneY = screenSize.Y * 0.35
+
 -- ===== 公告数据 =====
 local AnnouncementData = {
     currentUpdate = [[
@@ -48,11 +58,12 @@ local AnnouncementData = {
 ✅ 抓包AI功能 (60秒)
 ✅ 卡密验证系统 (60秒)
 ✅ 主页面板 (显示时间+倒计时)
+✅ 自动出租车 (KAN)
     ]],
     versionHistory = [[
 📜 版本历史：
 
-v2.1 (2026-07-31) - 野兽主题上线
+v2.1 (2026-07-31) - 野兽主题上线 + 自动出租车
 v2.0 (2026-07-30) - 完整自瞄+透视
 v1.0 (2026-07-28) - 基础框架
     ]],
@@ -125,31 +136,29 @@ local verifyCallback = nil
 local rightContent = nil
 local mainFrame = nil
 local timerConnection = nil
+local taxiStatusLabel = nil
+local taxiOrderLabel = nil
+local taxiTeleportLabel = nil
+local taxiToggleBtn = nil
+local taxiDot = nil
 
 -- ============================================================
--- 加载图片（带备用方案）
+-- 加载图片
 -- ============================================================
 local function loadImage(imageLabel)
-    -- 先用你的链接
     if IMAGE_URL and IMAGE_URL ~= "" then
         pcall(function()
             imageLabel.Image = IMAGE_URL
         end)
     end
-    
-    -- 如果加载失败，使用备用图片（Roblox内置）
     task.wait(0.5)
     if imageLabel.Image == "" or imageLabel.Image == IMAGE_URL then
         pcall(function()
-            -- 使用Roblox内置图片作为备用
             imageLabel.Image = "rbxasset://textures/ui/Shell/Window.png"
         end)
     end
 end
 
--- ============================================================
--- 加载主背景图片
--- ============================================================
 local function loadBackground(frame)
     local bg = Instance.new("ImageLabel")
     bg.Size = UDim2.new(1, 0, 1, 0)
@@ -162,6 +171,130 @@ local function loadBackground(frame)
 end
 
 -- ============================================================
+-- 自动出租车核心功能
+-- ============================================================
+local function ClickAt(x, y)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+local function AcceptOrder()
+    ClickAt(phoneX, phoneY)
+    task.wait(0.3)
+    ClickAt(phoneX, phoneY + 100)
+    task.wait(0.3)
+    ClickAt(phoneX, phoneY + 160)
+    task.wait(0.3)
+    ClickAt(phoneX, phoneY + 240)
+    task.wait(0.3)
+    orderCount = orderCount + 1
+    if taxiOrderLabel then
+        taxiOrderLabel.Text = "📦 接单: " .. orderCount
+    end
+    print("✅ 已接单")
+end
+
+local function GetTargetPosition()
+    local targetFolder = workspace.Gameplay.Entities.ClientContent
+    if not targetFolder then return nil end
+    for _, child in ipairs(targetFolder:GetDescendants()) do
+        if child:IsA("BasePart") then
+            return child.Position + Vector3.new(0, 3, 0)
+        end
+    end
+    return nil
+end
+
+local function TeleportCharacter(targetPos)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid and humanoid.SeatPart then
+        humanoid.Sit = false
+        task.wait(0.1)
+    end
+    
+    hrp.CFrame = CFrame.new(targetPos)
+    hrp.Velocity = Vector3.new(0, 0, 0)
+    hrp.RotVelocity = Vector3.new(0, 0, 0)
+    return true
+end
+
+local function UpdateTaxiUI(isActive)
+    if not taxiStatusLabel then return end
+    if isActive then
+        taxiStatusLabel.Text = "▶️ 运行中"
+        taxiStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+        taxiToggleBtn.Text = "⏹️ 停止"
+        taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        if taxiDot then
+            taxiDot.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
+        end
+    else
+        taxiStatusLabel.Text = "⏸️ 已停止"
+        taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+        taxiToggleBtn.Text = "▶️ 启动"
+        taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+        if taxiDot then
+            taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        end
+    end
+end
+
+local function StartTaxiLoop()
+    if taxiRunning then return end
+    taxiRunning = true
+    UpdateTaxiUI(true)
+    
+    taxiThread = coroutine.create(function()
+        print("🚗 自动出租车已启动")
+        
+        while taxiRunning do
+            -- 接单
+            AcceptOrder()
+            task.wait(1)
+            
+            -- 第1次传送
+            local targetPos1 = GetTargetPosition()
+            if targetPos1 then
+                TeleportCharacter(targetPos1)
+                teleportCount = teleportCount + 1
+                if taxiTeleportLabel then
+                    taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
+                end
+                print("✅ 第1次传送完成")
+            end
+            task.wait(2.5)
+            
+            -- 第2次传送
+            local targetPos2 = GetTargetPosition()
+            if targetPos2 then
+                TeleportCharacter(targetPos2)
+                teleportCount = teleportCount + 1
+                if taxiTeleportLabel then
+                    taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
+                end
+                print("✅ 第2次传送完成")
+            end
+            
+            task.wait(2)
+        end
+    end)
+    
+    coroutine.resume(taxiThread)
+end
+
+local function StopTaxiLoop()
+    taxiRunning = false
+    UpdateTaxiUI(false)
+    taxiThread = nil
+end
+
+-- ============================================================
 -- 检查卡密是否过期
 -- ============================================================
 local function checkAndForceClose()
@@ -169,6 +302,9 @@ local function checkAndForceClose()
         local elapsed = tick() - verifyTime
         if elapsed >= verifyDuration then
             isVerified = false
+            if taxiRunning then
+                StopTaxiLoop()
+            end
             if mainScreenGui then
                 mainScreenGui:Destroy()
                 mainScreenGui = nil
@@ -182,7 +318,6 @@ local function checkAndForceClose()
                 timerConnection:Disconnect()
                 timerConnection = nil
             end
-            -- 过期提示
             local notifyGui = Instance.new("ScreenGui")
             notifyGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
             notifyGui.Name = "ExpiredNotify"
@@ -196,7 +331,6 @@ local function checkAndForceClose()
             notifyFrame.BorderColor3 = Color3.fromRGB(255, 0, 0)
             notifyFrame.Parent = notifyGui
             
-            -- 背景贴图
             loadBackground(notifyFrame)
             
             local notifyText = Instance.new("TextLabel")
@@ -241,7 +375,6 @@ local function createHomePanel(parent)
     
     if checkAndForceClose() then return end
     
-    -- 背景贴图
     local bg = loadBackground(parent)
     
     local title = Instance.new("TextLabel")
@@ -330,7 +463,6 @@ local function createHomePanel(parent)
     cardDisplay.Parent = cardFrame
     y = y + 88
     
-    -- 底部信息
     local info = Instance.new("TextLabel")
     info.Size = UDim2.new(0, 380, 0, 20)
     info.Position = UDim2.new(0, 10, 0, y)
@@ -342,7 +474,6 @@ local function createHomePanel(parent)
     info.TextSize = 11
     info.Parent = parent
     
-    -- 更新函数
     local function updateHome()
         if checkAndForceClose() then return end
         
@@ -391,6 +522,160 @@ local function createHomePanel(parent)
 end
 
 -- ============================================================
+-- 创建出租车面板
+-- ============================================================
+local function createTaxiPanel(parent)
+    for _, child in ipairs(parent:GetChildren()) do child:Destroy() end
+    local y = 5
+    
+    if checkAndForceClose() then return end
+    
+    local bg = loadBackground(parent)
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(0, 380, 0, 30)
+    title.Position = UDim2.new(0, 10, 0, y)
+    title.Text = "🚗 自动出租车"
+    title.TextColor3 = Color3.fromRGB(255, 50, 150)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 18
+    title.Parent = parent
+    y = y + 35
+    
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(0, 380, 0, 2)
+    line.Position = UDim2.new(0, 10, 0, y)
+    line.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
+    line.BorderSizePixel = 0
+    line.Parent = parent
+    y = y + 12
+    
+    -- 状态显示
+    local statusFrame = Instance.new("Frame")
+    statusFrame.Size = UDim2.new(0, 380, 0, 35)
+    statusFrame.Position = UDim2.new(0, 10, 0, y)
+    statusFrame.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
+    statusFrame.BackgroundTransparency = 0.3
+    statusFrame.BorderSizePixel = 1
+    statusFrame.BorderColor3 = Color3.fromRGB(255, 50, 150)
+    statusFrame.Parent = parent
+    
+    -- 状态点
+    taxiDot = Instance.new("Frame")
+    taxiDot.Size = UDim2.new(0, 12, 0, 12)
+    taxiDot.Position = UDim2.new(0, 10, 0, 11)
+    taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    taxiDot.BorderSizePixel = 0
+    taxiDot.Parent = statusFrame
+    
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(1, 0)
+    dotCorner.Parent = taxiDot
+    
+    taxiStatusLabel = Instance.new("TextLabel")
+    taxiStatusLabel.Size = UDim2.new(1, -30, 1, 0)
+    taxiStatusLabel.Position = UDim2.new(0, 30, 0, 0)
+    taxiStatusLabel.Text = "⏸️ 已停止"
+    taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    taxiStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    taxiStatusLabel.BackgroundTransparency = 1
+    taxiStatusLabel.Font = Enum.Font.Gotham
+    taxiStatusLabel.TextSize = 14
+    taxiStatusLabel.Parent = statusFrame
+    y = y + 43
+    
+    -- 统计信息
+    taxiOrderLabel = Instance.new("TextLabel")
+    taxiOrderLabel.Size = UDim2.new(0.5, 0, 0, 25)
+    taxiOrderLabel.Position = UDim2.new(0, 10, 0, y)
+    taxiOrderLabel.BackgroundTransparency = 1
+    taxiOrderLabel.Text = "📦 接单: 0"
+    taxiOrderLabel.TextColor3 = Color3.fromRGB(255, 70, 70)
+    taxiOrderLabel.TextXAlignment = Enum.TextXAlignment.Left
+    taxiOrderLabel.BackgroundTransparency = 1
+    taxiOrderLabel.Font = Enum.Font.GothamBold
+    taxiOrderLabel.TextSize = 13
+    taxiOrderLabel.Parent = parent
+    
+    taxiTeleportLabel = Instance.new("TextLabel")
+    taxiTeleportLabel.Size = UDim2.new(0.5, 0, 0, 25)
+    taxiTeleportLabel.Position = UDim2.new(0.5, 0, 0, y)
+    taxiTeleportLabel.BackgroundTransparency = 1
+    taxiTeleportLabel.Text = "🚗 传送: 0"
+    taxiTeleportLabel.TextColor3 = Color3.fromRGB(70, 150, 255)
+    taxiTeleportLabel.TextXAlignment = Enum.TextXAlignment.Left
+    taxiTeleportLabel.BackgroundTransparency = 1
+    taxiTeleportLabel.Font = Enum.Font.GothamBold
+    taxiTeleportLabel.TextSize = 13
+    taxiTeleportLabel.Parent = parent
+    y = y + 30
+    
+    local descLabel = Instance.new("TextLabel")
+    descLabel.Size = UDim2.new(1, 0, 0, 22)
+    descLabel.Position = UDim2.new(0, 10, 0, y)
+    descLabel.BackgroundTransparency = 1
+    descLabel.Text = "🔄 自动接单 + 自动传送"
+    descLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    descLabel.TextXAlignment = Enum.TextXAlignment.Left
+    descLabel.BackgroundTransparency = 1
+    descLabel.Font = Enum.Font.Gotham
+    descLabel.TextSize = 12
+    descLabel.Parent = parent
+    y = y + 28
+    
+    -- 启动/停止按钮
+    taxiToggleBtn = Instance.new("TextButton")
+    taxiToggleBtn.Size = UDim2.new(0, 140, 0, 40)
+    taxiToggleBtn.Position = UDim2.new(0.5, -70, 0, y)
+    taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+    taxiToggleBtn.Text = "▶️ 启动"
+    taxiToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    taxiToggleBtn.TextScaled = true
+    taxiToggleBtn.Font = Enum.Font.GothamBold
+    taxiToggleBtn.BorderSizePixel = 0
+    taxiToggleBtn.Parent = parent
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.Parent = taxiToggleBtn
+    y = y + 48
+    
+    local info = Instance.new("TextLabel")
+    info.Size = UDim2.new(0, 380, 0, 20)
+    info.Position = UDim2.new(0, 10, 0, y)
+    info.Text = "💡 KAN · 自动出租车系统"
+    info.TextColor3 = Color3.fromRGB(150, 100, 130)
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.BackgroundTransparency = 1
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 11
+    info.Parent = parent
+    
+    -- 按钮事件
+    taxiToggleBtn.MouseButton1Click:Connect(function()
+        if checkAndForceClose() then return end
+        if taxiRunning then
+            StopTaxiLoop()
+        else
+            StartTaxiLoop()
+        end
+    end)
+    
+    -- 角色重生时重连
+    LocalPlayer.CharacterAdded:Connect(function()
+        if taxiRunning then
+            task.wait(1)
+            local pos = GetTargetPosition()
+            if pos then
+                pcall(function() TeleportCharacter(pos) end)
+            end
+        end
+    end)
+end
+
+-- ============================================================
 -- 创建公告面板
 -- ============================================================
 local function createAnnouncementContent(parent)
@@ -399,7 +684,6 @@ local function createAnnouncementContent(parent)
     
     if checkAndForceClose() then return end
     
-    -- 背景贴图
     local bg = loadBackground(parent)
     
     local title = Instance.new("TextLabel")
@@ -507,7 +791,6 @@ local function createAIPanel(parent)
     
     if checkAndForceClose() then return end
     
-    -- 背景贴图
     local bg = loadBackground(parent)
     
     local title = Instance.new("TextLabel")
@@ -530,7 +813,6 @@ local function createAIPanel(parent)
     line.Parent = parent
     y = y + 12
     
-    -- 聊天框
     local chatBox = Instance.new("Frame")
     chatBox.Size = UDim2.new(0, 380, 0, 200)
     chatBox.Position = UDim2.new(0, 10, 0, y)
@@ -564,7 +846,6 @@ local function createAIPanel(parent)
     welcome.Parent = chatText
     y = y + 210
     
-    -- 输入框
     local inputBox = Instance.new("TextBox")
     inputBox.Size = UDim2.new(0, 280, 0, 35)
     inputBox.Position = UDim2.new(0, 10, 0, y)
@@ -590,7 +871,6 @@ local function createAIPanel(parent)
     sendBtn.Parent = parent
     y = y + 45
     
-    -- 抓包按钮
     local captureBtn = Instance.new("TextButton")
     captureBtn.Size = UDim2.new(0, 380, 0, 35)
     captureBtn.Position = UDim2.new(0, 10, 0, y)
@@ -795,7 +1075,6 @@ local function createUIAdjustPanel(parent, mainFrame)
     
     if checkAndForceClose() then return end
     
-    -- 背景贴图
     local bg = loadBackground(parent)
     
     local title = Instance.new("TextLabel")
@@ -1047,7 +1326,6 @@ local function createServerContent(parent)
     
     if checkAndForceClose() then return end
     
-    -- 背景贴图
     local bg = loadBackground(parent)
     
     local title = Instance.new("TextLabel")
@@ -1333,7 +1611,6 @@ local function createVerifyUI(callback)
     verifyScreenGui.Name = "VerifyUI"
     verifyScreenGui.ResetOnSpawn = false
     
-    -- 背景遮罩
     local bgMask = Instance.new("Frame")
     bgMask.Size = UDim2.new(1, 0, 1, 0)
     bgMask.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -1351,7 +1628,6 @@ local function createVerifyUI(callback)
     frame.Draggable = true
     frame.Parent = verifyScreenGui
     
-    -- 背景贴图
     local verifyBg = Instance.new("ImageLabel")
     verifyBg.Size = UDim2.new(1, 0, 1, 0)
     verifyBg.Position = UDim2.new(0, 0, 0, 0)
@@ -1360,7 +1636,6 @@ local function createVerifyUI(callback)
     verifyBg.Parent = frame
     loadImage(verifyBg)
     
-    -- 大图片显示（居中）
     local bigImage = Instance.new("ImageLabel")
     bigImage.Size = UDim2.new(0, 100, 0, 100)
     bigImage.Position = UDim2.new(0.5, -50, 0, 10)
@@ -1479,7 +1754,6 @@ local function loadMainUI()
     mainUI.Draggable = true
     mainUI.Parent = mainScreenGui
     
-    -- 主窗口背景贴图
     local mainBg = Instance.new("ImageLabel")
     mainBg.Size = UDim2.new(1, 0, 1, 0)
     mainBg.Position = UDim2.new(0, 0, 0, 0)
@@ -1496,7 +1770,6 @@ local function loadMainUI()
     titleBar.BorderSizePixel = 0
     titleBar.Parent = mainUI
     
-    -- 标题栏小图标
     local titleIcon = Instance.new("ImageLabel")
     titleIcon.Size = UDim2.new(0, 24, 0, 24)
     titleIcon.Position = UDim2.new(0, 8, 0, 2)
@@ -1581,8 +1854,8 @@ local function loadMainUI()
     local currentTab = "主页"
     
     local btn0 = Instance.new("TextButton")
-    btn0.Size = UDim2.new(1, -10, 0, 24)
-    btn0.Position = UDim2.new(0, 5, 0, 6)
+    btn0.Size = UDim2.new(1, -10, 0, 22)
+    btn0.Position = UDim2.new(0, 5, 0, 5)
     btn0.Text = "🏠 主页"
     btn0.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn0.TextSize = 11
@@ -1591,8 +1864,8 @@ local function loadMainUI()
     btn0.Parent = leftPanel
     
     local btn1 = Instance.new("TextButton")
-    btn1.Size = UDim2.new(1, -10, 0, 24)
-    btn1.Position = UDim2.new(0, 5, 0, 34)
+    btn1.Size = UDim2.new(1, -10, 0, 22)
+    btn1.Position = UDim2.new(0, 5, 0, 30)
     btn1.Text = "🐾 公告"
     btn1.TextColor3 = Color3.fromRGB(255, 200, 220)
     btn1.TextSize = 11
@@ -1601,8 +1874,8 @@ local function loadMainUI()
     btn1.Parent = leftPanel
     
     local btn2 = Instance.new("TextButton")
-    btn2.Size = UDim2.new(1, -10, 0, 24)
-    btn2.Position = UDim2.new(0, 5, 0, 62)
+    btn2.Size = UDim2.new(1, -10, 0, 22)
+    btn2.Position = UDim2.new(0, 5, 0, 55)
     btn2.Text = "🐾 服务器"
     btn2.TextColor3 = Color3.fromRGB(255, 200, 220)
     btn2.TextSize = 11
@@ -1611,9 +1884,9 @@ local function loadMainUI()
     btn2.Parent = leftPanel
     
     local btn3 = Instance.new("TextButton")
-    btn3.Size = UDim2.new(1, -10, 0, 24)
-    btn3.Position = UDim2.new(0, 5, 0, 90)
-    btn3.Text = "📐 调整"
+    btn3.Size = UDim2.new(1, -10, 0, 22)
+    btn3.Position = UDim2.new(0, 5, 0, 80)
+    btn3.Text = "🚗 出租车"
     btn3.TextColor3 = Color3.fromRGB(255, 200, 220)
     btn3.TextSize = 11
     btn3.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
@@ -1621,14 +1894,24 @@ local function loadMainUI()
     btn3.Parent = leftPanel
     
     local btn4 = Instance.new("TextButton")
-    btn4.Size = UDim2.new(1, -10, 0, 24)
-    btn4.Position = UDim2.new(0, 5, 0, 118)
-    btn4.Text = "🤖 AI"
+    btn4.Size = UDim2.new(1, -10, 0, 22)
+    btn4.Position = UDim2.new(0, 5, 0, 105)
+    btn4.Text = "📐 调整"
     btn4.TextColor3 = Color3.fromRGB(255, 200, 220)
     btn4.TextSize = 11
     btn4.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
     btn4.BorderSizePixel = 0
     btn4.Parent = leftPanel
+    
+    local btn5 = Instance.new("TextButton")
+    btn5.Size = UDim2.new(1, -10, 0, 22)
+    btn5.Position = UDim2.new(0, 5, 0, 130)
+    btn5.Text = "🤖 AI"
+    btn5.TextColor3 = Color3.fromRGB(255, 200, 220)
+    btn5.TextSize = 11
+    btn5.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+    btn5.BorderSizePixel = 0
+    btn5.Parent = leftPanel
     
     btn0.MouseButton1Click:Connect(function()
         currentTab = "主页"
@@ -1637,11 +1920,13 @@ local function loadMainUI()
         btn2.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn3.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn4.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn5.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn0.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn1.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn2.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn3.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn4.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn5.TextColor3 = Color3.fromRGB(255, 200, 220)
         createHomePanel(rightContent)
         updateCanvas()
     end)
@@ -1653,11 +1938,13 @@ local function loadMainUI()
         btn2.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn3.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn4.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn5.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn1.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn0.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn2.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn3.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn4.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn5.TextColor3 = Color3.fromRGB(255, 200, 220)
         createAnnouncementContent(rightContent)
         updateCanvas()
     end)
@@ -1669,43 +1956,67 @@ local function loadMainUI()
         btn1.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn3.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn4.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn5.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn2.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn0.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn1.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn3.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn4.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn5.TextColor3 = Color3.fromRGB(255, 200, 220)
         createServerContent(rightContent)
         updateCanvas()
     end)
     
     btn3.MouseButton1Click:Connect(function()
-        currentTab = "调整"
+        currentTab = "出租车"
         btn3.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
         btn0.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn1.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn2.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn4.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn5.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn3.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn0.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn1.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn2.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn4.TextColor3 = Color3.fromRGB(255, 200, 220)
-        createUIAdjustPanel(rightContent, mainUI)
+        btn5.TextColor3 = Color3.fromRGB(255, 200, 220)
+        createTaxiPanel(rightContent)
         updateCanvas()
     end)
     
     btn4.MouseButton1Click:Connect(function()
-        currentTab = "AI"
+        currentTab = "调整"
         btn4.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
         btn0.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn1.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn2.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn3.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn5.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
         btn4.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn0.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn1.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn2.TextColor3 = Color3.fromRGB(255, 200, 220)
         btn3.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn5.TextColor3 = Color3.fromRGB(255, 200, 220)
+        createUIAdjustPanel(rightContent, mainUI)
+        updateCanvas()
+    end)
+    
+    btn5.MouseButton1Click:Connect(function()
+        currentTab = "AI"
+        btn5.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
+        btn0.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn1.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn2.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn3.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn4.BackgroundColor3 = Color3.fromRGB(40, 15, 35)
+        btn5.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn0.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn1.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn2.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn3.TextColor3 = Color3.fromRGB(255, 200, 220)
+        btn4.TextColor3 = Color3.fromRGB(255, 200, 220)
         createAIPanel(rightContent)
         updateCanvas()
     end)
@@ -1734,6 +2045,9 @@ local function loadMainUI()
     end)
     
     closeBtn.MouseButton1Click:Connect(function()
+        if taxiRunning then
+            StopTaxiLoop()
+        end
         if mainScreenGui then
             mainScreenGui:Destroy()
             mainScreenGui = nil
@@ -1750,4 +2064,5 @@ createVerifyUI(function()
     print("✅ 卡密验证通过！")
     print("✅ 野兽脚本已加载")
     print("⏰ 卡密有效期60秒")
+    print("🚗 点击「出租车」使用自动接单传送")
 end)
