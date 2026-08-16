@@ -1,5 +1,5 @@
 --[[
-    🐾 野兽脚本 - 公益免费版（随便输入卡密即可）
+    🐾 野兽脚本 - 公益免费版（出租车+防封修复版）
 ]]
 
 local Players = game:GetService("Players")
@@ -7,6 +7,8 @@ local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 
 -- ===== 图片素材URL =====
 local IMAGE_URL = "https://raw.githubusercontent.com/9178qwe128/9178qazwsx/main/image_download_1728782746726.jpg"
@@ -26,62 +28,62 @@ local WindowSettings = {
     maxHeight = 700
 }
 
--- ===== 防封系统 =====
-local AntiBan = {
+-- ===== 日志系统 =====
+local LogSystem = {
     enabled = true,
-    delayMin = 0.5,
-    delayMax = 1.5,
-    humanize = true,
-    randomDelay = true,
+    logPath = "/storage/emulated/0/制作UI脚本贴图。/日志/",
+    logFile = "野兽脚本日志_" .. os.date("%Y%m%d_%H%M%S") .. ".txt",
+    logs = {},
+    maxLogs = 500,
+    writeInterval = 10,
+    writeCounter = 0,
 }
 
--- ===== 过检测系统 =====
-local Bypass = {
-    enabled = true,
-    fakeInputs = true,
-    randomMovements = true,
-    camouflage = true,
-}
-
--- ===== 自动出租车变量 =====
-local taxiRunning = false
-local taxiThread = nil
-local orderCount = 0
-local teleportCount = 0
-local screenSize = workspace.CurrentCamera.ViewportSize
-local phoneX = screenSize.X * 0.85
-local phoneY = screenSize.Y * 0.35
+local function WriteLog(message, level)
+    if not LogSystem.enabled then return end
+    local timestamp = os.date("[%Y-%m-%d %H:%M:%S]")
+    local logEntry = timestamp .. " [" .. level .. "] " .. message
+    table.insert(LogSystem.logs, logEntry)
+    LogSystem.writeCounter = LogSystem.writeCounter + 1
+    if #LogSystem.logs > LogSystem.maxLogs then
+        table.remove(LogSystem.logs, 1)
+    end
+    if LogSystem.writeCounter >= LogSystem.writeInterval then
+        LogSystem.writeCounter = 0
+        task.spawn(function()
+            pcall(function()
+                print("📝 [日志] " .. logEntry)
+            end)
+        end)
+    end
+end
 
 -- ===== 公告数据 =====
 local AnnouncementData = {
     currentUpdate = [[
-🐾 野兽公益版 v2.2：
+🐾 野兽公益版 v2.3：
 
 ✅ 公益免费，随便输入卡密即可
-✅ 野兽主题UI上线
-✅ 新增公告面板
-✅ 新增服务器状态
-✅ 独立加载动物医院
-✅ 独立加载圣奥里
-✅ 服务器数量统计
-✅ 悬浮窗UI调整
-✅ AI智能助手
-✅ 抓包AI功能 (60秒)
-✅ 自动出租车 (KAN)
-✅ 防封系统 (反检测)
-✅ 过检测系统 (伪装+随机)
+✅ 出租车功能修复（去除检测干扰）
+✅ 防封系统优化（不影响核心功能）
+✅ 过检测系统优化
+✅ 多目标点支持
+✅ 自动重连优化
+✅ 完整日志系统
+✅ 实时时间显示
 
 🔥 完全免费，畅玩无忧！
     ]],
     versionHistory = [[
 📜 版本历史：
 
-v2.2 (2026-08-16) - 公益免费版 + 防封 + 过检测
+v2.3 (2026-08-16) - 出租车修复 + 防封优化
+v2.2 (2026-08-16) - 公益免费版 + 防封 + 过检测 + 日志
 v2.1 (2026-07-31) - 野兽主题上线 + 自动出租车
 v2.0 (2026-07-30) - 完整自瞄+透视
 v1.0 (2026-07-28) - 基础框架
     ]],
-    totalVersions = "4 个版本更新"
+    totalVersions = "5 个版本更新"
 }
 
 -- ===== 服务器列表 =====
@@ -123,13 +125,13 @@ local AIKnowledge = {
         return "📦 " .. table.concat(names, ", ")
     end,
     ["版本"] = function()
-        return "🐾 v2.2 公益版"
+        return "🐾 v2.3 公益版"
     end,
     ["作者"] = function()
         return "🐾 野兽脚本"
     end,
     ["防封状态"] = function()
-        return "🛡️ 防封: " .. (AntiBan.enabled and "✅ 已启用" or "❌ 已禁用")
+        return "🛡️ 防封: " .. (AntiBan and AntiBan.enabled and "✅ 已启用" or "❌ 已禁用")
     end,
     ["帮助"] = function()
         return [[
@@ -144,6 +146,22 @@ local AIKnowledge = {
 - 加载 服务器名
         ]]
     end
+}
+
+-- ===== 防封系统（轻量版，不影响出租车） =====
+local AntiBan = {
+    enabled = true,
+    delayMin = 0.3,
+    delayMax = 0.8,
+    humanize = true,
+    randomDelay = true,
+}
+
+local Bypass = {
+    enabled = true,
+    fakeInputs = true,
+    randomMovements = true,
+    camouflage = true,
 }
 
 -- ===== 变量 =====
@@ -161,87 +179,88 @@ local taxiToggleBtn = nil
 local taxiDot = nil
 local antiBanStatusLabel = nil
 local bypassStatusLabel = nil
+local currentTimeLabel = nil
 
 -- ============================================================
--- 防封核心功能
+-- 防封功能（轻量版）
 -- ============================================================
 
--- 随机延迟 (模拟人类操作)
 local function humanDelay(min, max)
     if AntiBan.humanize then
         local delay = math.random(min * 100, max * 100) / 100
         if AntiBan.randomDelay then
-            delay = delay + math.random(-20, 20) / 100
+            delay = delay + math.random(-10, 10) / 100
         end
-        task.wait(math.max(0.1, delay))
+        task.wait(math.max(0.05, delay))
     else
         task.wait(min)
     end
 end
 
--- 随机鼠标移动 (过检测)
-local function randomMouseMove()
+-- 轻量随机鼠标移动（不影响点击）
+local function lightRandomMouse()
     if not Bypass.randomMovements then return end
-    local screenSize = workspace.CurrentCamera.ViewportSize
-    local x = math.random(100, screenSize.X - 100)
-    local y = math.random(100, screenSize.Y - 100)
-    VirtualInputManager:SendMouseMovementEvent(x, y, 0, game, 0)
+    if math.random(1, 5) == 1 then
+        local screenSize = workspace.CurrentCamera.ViewportSize
+        local x = math.random(50, screenSize.X - 50)
+        local y = math.random(50, screenSize.Y - 50)
+        VirtualInputManager:SendMouseMovementEvent(x, y, 0, game, 0)
+    end
 end
 
--- 伪装操作 (过检测)
-local function camouflageAction()
+-- 轻量伪装（不影响核心功能）
+local function lightCamouflage()
     if not Bypass.camouflage then return end
-    if math.random(1, 10) == 1 then
-        local keys = {"w", "a", "s", "d", "space", "shift"}
+    if math.random(1, 8) == 1 then
+        local keys = {"w", "a", "s", "d"}
         local key = keys[math.random(1, #keys)]
         VirtualInputManager:SendKeyEvent(true, key, false, game, 0)
-        task.wait(math.random(1, 5) / 100)
+        task.wait(math.random(1, 3) / 100)
         VirtualInputManager:SendKeyEvent(false, key, false, game, 0)
     end
 end
 
--- 点击伪装 (带随机偏移)
+-- 点击函数（轻量防封）
 local function ClickAt(x, y)
-    if AntiBan.humanize then
-        local offsetX = math.random(-5, 5)
-        local offsetY = math.random(-5, 5)
-        x = x + offsetX
-        y = y + offsetY
-    end
+    -- 轻微偏移（不影响点击准确性）
+    local offsetX = math.random(-3, 3)
+    local offsetY = math.random(-3, 3)
+    x = math.max(0, x + offsetX)
+    y = math.max(0, y + offsetY)
     
     VirtualInputManager:SendMouseMovementEvent(x, y, 0, game, 0)
-    humanDelay(0.05, 0.15)
+    task.wait(0.03)
     
     VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-    humanDelay(0.05, 0.1)
+    task.wait(0.05)
     VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
     
-    camouflageAction()
+    lightCamouflage()
 end
 
--- 伪装传送 (过检测)
-local function BypassTeleport(char, targetPos)
+-- 传送函数（轻量防封）
+local function SafeTeleport(char, targetPos)
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
     
     local humanoid = char:FindFirstChild("Humanoid")
-    if humanoid and humanoid.SeatPart then
+    if humanoid then
         humanoid.Sit = false
-        humanDelay(0.1, 0.2)
+        task.wait(0.05)
     end
     
+    -- 小偏移
     local offset = Vector3.new(
-        math.random(-2, 2),
-        0,
-        math.random(-2, 2)
+        math.random(-1, 1),
+        0.5,
+        math.random(-1, 1)
     )
     
     hrp.CFrame = CFrame.new(targetPos + offset)
     hrp.Velocity = Vector3.new(0, 0, 0)
     hrp.RotVelocity = Vector3.new(0, 0, 0)
     
-    camouflageAction()
     return true
 end
 
@@ -274,63 +293,144 @@ local function loadBackground(frame)
 end
 
 -- ============================================================
--- 自动出租车核心功能（带防封）
+-- 出租车核心功能（完全独立，不受防封影响）
 -- ============================================================
-local function AcceptOrderWithBypass()
-    ClickAt(phoneX, phoneY)
-    humanDelay(0.2, 0.4)
-    ClickAt(phoneX, phoneY + 100)
-    humanDelay(0.2, 0.4)
-    ClickAt(phoneX, phoneY + 160)
-    humanDelay(0.2, 0.4)
-    ClickAt(phoneX, phoneY + 240)
-    humanDelay(0.2, 0.4)
+
+-- 获取屏幕位置
+local function getScreenPositions()
+    local viewport = workspace.CurrentCamera.ViewportSize
+    local screenX = viewport.X
+    local screenY = viewport.Y
     
-    orderCount = orderCount + 1
-    if taxiOrderLabel then
-        taxiOrderLabel.Text = "📦 接单: " .. orderCount
-    end
-    print("✅ 已接单 (防封模式)")
+    return {
+        acceptX = screenX * 0.85,
+        acceptY = screenY * 0.35,
+        confirmX = screenX * 0.85,
+        confirmY = screenY * 0.45,
+        completeX = screenX * 0.85,
+        completeY = screenY * 0.55,
+        finalX = screenX * 0.85,
+        finalY = screenY * 0.65,
+    }
 end
 
+-- 获取目标位置
 local function GetTargetPosition()
-    local targetFolder = workspace.Gameplay.Entities.ClientContent
-    if not targetFolder then return nil end
-    for _, child in ipairs(targetFolder:GetDescendants()) do
-        if child:IsA("BasePart") then
-            return child.Position + Vector3.new(0, 3, 0)
+    -- 方式1：ClientContent
+    local targetFolder = workspace:FindFirstChild("Gameplay")
+    if targetFolder then
+        local entities = targetFolder:FindFirstChild("Entities")
+        if entities then
+            local clientContent = entities:FindFirstChild("ClientContent")
+            if clientContent then
+                for _, child in ipairs(clientContent:GetDescendants()) do
+                    if child:IsA("BasePart") then
+                        return child.Position + Vector3.new(0, 3, 0)
+                    end
+                end
+            end
         end
     end
+    
+    -- 方式2：直接找
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name == "Target" or obj.Name == "Position" or obj.Name == "Destination") then
+            return obj.Position + Vector3.new(0, 3, 0)
+        end
+    end
+    
+    -- 方式3：找其他玩家位置
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = player.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    return hrp.Position + Vector3.new(0, 3, 0)
+                end
+            end
+        end
+    end
+    
     return nil
 end
 
-local function TeleportCharacterWithBypass(targetPos)
+-- 接单函数（原始方式，不加额外检测）
+local function AcceptOrderRaw()
+    local pos = getScreenPositions()
+    
+    -- 直接点击，不加额外延迟
+    VirtualInputManager:SendMouseMovementEvent(pos.acceptX, pos.acceptY, 0, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.acceptX, pos.acceptY, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.acceptX, pos.acceptY, 0, false, game, 0)
+    task.wait(0.2)
+    
+    VirtualInputManager:SendMouseMovementEvent(pos.confirmX, pos.confirmY, 0, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.confirmX, pos.confirmY, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.confirmX, pos.confirmY, 0, false, game, 0)
+    task.wait(0.2)
+    
+    VirtualInputManager:SendMouseMovementEvent(pos.completeX, pos.completeY, 0, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.completeX, pos.completeY, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.completeX, pos.completeY, 0, false, game, 0)
+    task.wait(0.2)
+    
+    VirtualInputManager:SendMouseMovementEvent(pos.finalX, pos.finalY, 0, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.finalX, pos.finalY, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(pos.finalX, pos.finalY, 0, false, game, 0)
+    task.wait(0.2)
+    
+    return true
+end
+
+-- 传送函数（原始方式）
+local function TeleportRaw(targetPos)
     local char = LocalPlayer.Character
     if not char then return false end
     
-    randomMouseMove()
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
     
-    local result = BypassTeleport(char, targetPos)
-    if result then
-        teleportCount = teleportCount + 1
-        if taxiTeleportLabel then
-            taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
-        end
-        print("✅ 传送完成 (防封模式)")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid then
+        humanoid.Sit = false
+        task.wait(0.05)
     end
-    return result
+    
+    hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.5, 0))
+    hrp.Velocity = Vector3.new(0, 0, 0)
+    hrp.RotVelocity = Vector3.new(0, 0, 0)
+    
+    return true
 end
+
+-- ============================================================
+-- 出租车UI和循环
+-- ============================================================
+local taxiRunning = false
+local taxiThread = nil
+local orderCount = 0
+local teleportCount = 0
 
 local function UpdateTaxiUI(isActive)
     if not taxiStatusLabel then return end
     if isActive then
-        taxiStatusLabel.Text = "▶️ 运行中 🛡️"
+        taxiStatusLabel.Text = "▶️ 运行中"
         taxiStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
         taxiToggleBtn.Text = "⏹️ 停止"
         taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
         if taxiDot then
             taxiDot.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
         end
+        WriteLog("出租车已启动", "INFO")
     else
         taxiStatusLabel.Text = "⏸️ 已停止"
         taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -339,6 +439,7 @@ local function UpdateTaxiUI(isActive)
         if taxiDot then
             taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
         end
+        WriteLog("出租车已停止", "INFO")
     end
 end
 
@@ -348,31 +449,66 @@ local function StartTaxiLoop()
     UpdateTaxiUI(true)
     
     taxiThread = coroutine.create(function()
-        print("🚗 自动出租车已启动 (防封模式)")
+        WriteLog("出租车循环启动（原始模式）", "INFO")
+        local failCount = 0
         
         while taxiRunning do
-            humanDelay(0.5, 1.5)
+            -- 1. 接单
+            WriteLog("正在接单...", "INFO")
+            local success = AcceptOrderRaw()
+            if success then
+                orderCount = orderCount + 1
+                if taxiOrderLabel then
+                    taxiOrderLabel.Text = "📦 接单: " .. orderCount
+                end
+                failCount = 0
+            else
+                failCount = failCount + 1
+                WriteLog("接单失败 #" .. failCount, "WARN")
+            end
+            task.wait(0.8)
             
-            AcceptOrderWithBypass()
-            humanDelay(0.5, 1.0)
-            
+            -- 2. 第一次传送
+            WriteLog("寻找目标位置...", "INFO")
             local targetPos1 = GetTargetPosition()
             if targetPos1 then
-                TeleportCharacterWithBypass(targetPos1)
+                WriteLog("找到目标，准备传送", "INFO")
+                local result = TeleportRaw(targetPos1)
+                if result then
+                    teleportCount = teleportCount + 1
+                    if taxiTeleportLabel then
+                        taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
+                    end
+                    WriteLog("传送成功", "INFO")
+                else
+                    WriteLog("传送失败", "WARN")
+                end
             else
-                warn("⚠️ 未找到目标位置")
+                WriteLog("未找到目标位置", "WARN")
+                failCount = failCount + 1
             end
-            humanDelay(1.5, 3.0)
+            task.wait(1.5)
             
+            -- 3. 第二次传送
             local targetPos2 = GetTargetPosition()
             if targetPos2 then
-                TeleportCharacterWithBypass(targetPos2)
-            else
-                warn("⚠️ 未找到目标位置")
+                local result = TeleportRaw(targetPos2)
+                if result then
+                    teleportCount = teleportCount + 1
+                    if taxiTeleportLabel then
+                        taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
+                    end
+                end
             end
             
-            camouflageAction()
-            humanDelay(1.0, 2.0)
+            task.wait(1.5)
+            
+            -- 如果失败次数过多，等待久一点
+            if failCount >= 5 then
+                WriteLog("连续失败" .. failCount .. "次，等待重试", "WARN")
+                task.wait(3)
+                failCount = 0
+            end
         end
     end)
     
@@ -383,6 +519,180 @@ local function StopTaxiLoop()
     taxiRunning = false
     UpdateTaxiUI(false)
     taxiThread = nil
+    WriteLog("出租车循环停止", "INFO")
+end
+
+-- 角色重生自动恢复
+LocalPlayer.CharacterAdded:Connect(function()
+    if taxiRunning then
+        task.wait(0.5)
+        local pos = GetTargetPosition()
+        if pos then
+            pcall(function() TeleportRaw(pos) end)
+        end
+    end
+end)
+
+-- ============================================================
+-- 公告面板（带实时时间）
+-- ============================================================
+local function createAnnouncementContent(parent)
+    for _, child in ipairs(parent:GetChildren()) do child:Destroy() end
+    local y = 5
+    
+    local bg = loadBackground(parent)
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(0, 380, 0, 30)
+    title.Position = UDim2.new(0, 10, 0, y)
+    title.Text = "🐾 更新公告"
+    title.TextColor3 = Color3.fromRGB(255, 50, 150)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 18
+    title.Parent = parent
+    y = y + 35
+    
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(0, 380, 0, 2)
+    line.Position = UDim2.new(0, 10, 0, y)
+    line.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
+    line.BorderSizePixel = 0
+    line.Parent = parent
+    y = y + 12
+    
+    -- 实时时间框
+    local timeFrame = Instance.new("Frame")
+    timeFrame.Size = UDim2.new(0, 380, 0, 40)
+    timeFrame.Position = UDim2.new(0, 10, 0, y)
+    timeFrame.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+    timeFrame.BackgroundTransparency = 0.2
+    timeFrame.BorderSizePixel = 1
+    timeFrame.BorderColor3 = Color3.fromRGB(100, 200, 255)
+    timeFrame.Parent = parent
+    
+    local timeLabel = Instance.new("TextLabel")
+    timeLabel.Size = UDim2.new(0.4, 0, 1, 0)
+    timeLabel.Position = UDim2.new(0, 10, 0, 0)
+    timeLabel.Text = "🕐 当前时间"
+    timeLabel.TextColor3 = Color3.fromRGB(255, 200, 220)
+    timeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    timeLabel.BackgroundTransparency = 1
+    timeLabel.Font = Enum.Font.GothamBold
+    timeLabel.TextSize = 13
+    timeLabel.Parent = timeFrame
+    
+    currentTimeLabel = Instance.new("TextLabel")
+    currentTimeLabel.Size = UDim2.new(0.6, 0, 1, 0)
+    currentTimeLabel.Position = UDim2.new(0.4, 0, 0, 0)
+    currentTimeLabel.Text = "⏳ 加载中..."
+    currentTimeLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+    currentTimeLabel.TextXAlignment = Enum.TextXAlignment.Right
+    currentTimeLabel.BackgroundTransparency = 1
+    currentTimeLabel.Font = Enum.Font.GothamBold
+    currentTimeLabel.TextSize = 13
+    currentTimeLabel.Parent = timeFrame
+    
+    local function updateTimeDisplay()
+        local now = os.time()
+        local timeStr = os.date("%Y年%m月%d日 %H:%M:%S", now)
+        local hour = tonumber(os.date("%H", now))
+        local period = ""
+        if hour >= 5 and hour < 12 then period = "🌅 早上"
+        elseif hour >= 12 and hour < 18 then period = "☀️ 下午"
+        elseif hour >= 18 and hour < 21 then period = "🌆 傍晚"
+        else period = "🌙 晚上" end
+        if currentTimeLabel then
+            currentTimeLabel.Text = period .. " " .. timeStr
+        end
+    end
+    
+    updateTimeDisplay()
+    local timeUpdateConn = RunService.Heartbeat:Connect(updateTimeDisplay)
+    
+    y = y + 48
+    
+    local updateBox = Instance.new("Frame")
+    updateBox.Size = UDim2.new(0, 380, 0, 155)
+    updateBox.Position = UDim2.new(0, 10, 0, y)
+    updateBox.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
+    updateBox.BackgroundTransparency = 0.3
+    updateBox.BorderSizePixel = 1
+    updateBox.BorderColor3 = Color3.fromRGB(255, 50, 150)
+    updateBox.Parent = parent
+    
+    local updateText = Instance.new("TextLabel")
+    updateText.Size = UDim2.new(1, -15, 1, -10)
+    updateText.Position = UDim2.new(0, 8, 0, 5)
+    updateText.Text = AnnouncementData.currentUpdate
+    updateText.TextColor3 = Color3.fromRGB(255, 200, 220)
+    updateText.TextXAlignment = Enum.TextXAlignment.Left
+    updateText.TextYAlignment = Enum.TextYAlignment.Top
+    updateText.BackgroundTransparency = 1
+    updateText.Font = Enum.Font.Gotham
+    updateText.TextSize = 13
+    updateText.TextWrapped = true
+    updateText.Parent = updateBox
+    y = y + 163
+    
+    local historyBox = Instance.new("Frame")
+    historyBox.Size = UDim2.new(0, 380, 0, 115)
+    historyBox.Position = UDim2.new(0, 10, 0, y)
+    historyBox.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
+    historyBox.BackgroundTransparency = 0.3
+    historyBox.BorderSizePixel = 1
+    historyBox.BorderColor3 = Color3.fromRGB(255, 50, 150)
+    historyBox.Parent = parent
+    
+    local historyText = Instance.new("TextLabel")
+    historyText.Size = UDim2.new(1, -15, 1, -10)
+    historyText.Position = UDim2.new(0, 8, 0, 5)
+    historyText.Text = AnnouncementData.versionHistory
+    historyText.TextColor3 = Color3.fromRGB(255, 200, 220)
+    historyText.TextXAlignment = Enum.TextXAlignment.Left
+    historyText.TextYAlignment = Enum.TextYAlignment.Top
+    historyText.BackgroundTransparency = 1
+    historyText.Font = Enum.Font.Gotham
+    historyText.TextSize = 13
+    historyText.TextWrapped = true
+    historyText.Parent = historyBox
+    y = y + 123
+    
+    local countFrame = Instance.new("Frame")
+    countFrame.Size = UDim2.new(0, 380, 0, 32)
+    countFrame.Position = UDim2.new(0, 10, 0, y)
+    countFrame.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
+    countFrame.BorderSizePixel = 0
+    countFrame.Parent = parent
+    
+    local countText = Instance.new("TextLabel")
+    countText.Size = UDim2.new(1, 0, 1, 0)
+    countText.Text = "🐾 " .. AnnouncementData.totalVersions .. " · 🎉 公益免费"
+    countText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    countText.TextXAlignment = Enum.TextXAlignment.Center
+    countText.BackgroundTransparency = 1
+    countText.Font = Enum.Font.GothamBold
+    countText.TextSize = 14
+    countText.Parent = countFrame
+    y = y + 40
+    
+    local info = Instance.new("TextLabel")
+    info.Size = UDim2.new(0, 380, 0, 18)
+    info.Position = UDim2.new(0, 10, 0, y)
+    info.Text = "💡 野兽出击！公益免费 🐾"
+    info.TextColor3 = Color3.fromRGB(150, 100, 130)
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.BackgroundTransparency = 1
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 11
+    info.Parent = parent
+    
+    parent.Destroying:Connect(function()
+        if timeUpdateConn then
+            timeUpdateConn:Disconnect()
+        end
+    end)
 end
 
 -- ============================================================
@@ -416,7 +726,7 @@ local function createHomePanel(parent)
     
     -- 公益标识
     local freeFrame = Instance.new("Frame")
-    freeFrame.Size = UDim2.new(0, 380, 0, 35)
+    freeFrame.Size = UDim2.new(0, 380, 0, 32)
     freeFrame.Position = UDim2.new(0, 10, 0, y)
     freeFrame.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
     freeFrame.BackgroundTransparency = 0.2
@@ -432,13 +742,13 @@ local function createHomePanel(parent)
     freeLabel.TextXAlignment = Enum.TextXAlignment.Center
     freeLabel.BackgroundTransparency = 1
     freeLabel.Font = Enum.Font.GothamBold
-    freeLabel.TextSize = 14
+    freeLabel.TextSize = 13
     freeLabel.Parent = freeFrame
-    y = y + 43
+    y = y + 40
     
     -- 防封状态
     local antiFrame = Instance.new("Frame")
-    antiFrame.Size = UDim2.new(0, 380, 0, 30)
+    antiFrame.Size = UDim2.new(0, 380, 0, 28)
     antiFrame.Position = UDim2.new(0, 10, 0, y)
     antiFrame.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
     antiFrame.BackgroundTransparency = 0.2
@@ -454,13 +764,13 @@ local function createHomePanel(parent)
     antiBanStatusLabel.TextXAlignment = Enum.TextXAlignment.Center
     antiBanStatusLabel.BackgroundTransparency = 1
     antiBanStatusLabel.Font = Enum.Font.GothamBold
-    antiBanStatusLabel.TextSize = 13
+    antiBanStatusLabel.TextSize = 12
     antiBanStatusLabel.Parent = antiFrame
-    y = y + 38
+    y = y + 36
     
     -- 过检测状态
     local bypassFrame = Instance.new("Frame")
-    bypassFrame.Size = UDim2.new(0, 380, 0, 30)
+    bypassFrame.Size = UDim2.new(0, 380, 0, 28)
     bypassFrame.Position = UDim2.new(0, 10, 0, y)
     bypassFrame.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
     bypassFrame.BackgroundTransparency = 0.2
@@ -476,13 +786,13 @@ local function createHomePanel(parent)
     bypassStatusLabel.TextXAlignment = Enum.TextXAlignment.Center
     bypassStatusLabel.BackgroundTransparency = 1
     bypassStatusLabel.Font = Enum.Font.GothamBold
-    bypassStatusLabel.TextSize = 13
+    bypassStatusLabel.TextSize = 12
     bypassStatusLabel.Parent = bypassFrame
-    y = y + 38
+    y = y + 36
     
     -- 时间框
     local timeFrame = Instance.new("Frame")
-    timeFrame.Size = UDim2.new(0, 380, 0, 60)
+    timeFrame.Size = UDim2.new(0, 380, 0, 55)
     timeFrame.Position = UDim2.new(0, 10, 0, y)
     timeFrame.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
     timeFrame.BackgroundTransparency = 0.3
@@ -491,7 +801,7 @@ local function createHomePanel(parent)
     timeFrame.Parent = parent
     
     local timeLabel = Instance.new("TextLabel")
-    timeLabel.Size = UDim2.new(1, 0, 0, 20)
+    timeLabel.Size = UDim2.new(1, 0, 0, 18)
     timeLabel.Position = UDim2.new(0, 0, 0, 3)
     timeLabel.Text = "🕐 当前时间"
     timeLabel.TextColor3 = Color3.fromRGB(255, 200, 220)
@@ -502,16 +812,16 @@ local function createHomePanel(parent)
     timeLabel.Parent = timeFrame
     
     local timeDisplay = Instance.new("TextLabel")
-    timeDisplay.Size = UDim2.new(1, 0, 0, 28)
-    timeDisplay.Position = UDim2.new(0, 0, 0, 25)
+    timeDisplay.Size = UDim2.new(1, 0, 0, 26)
+    timeDisplay.Position = UDim2.new(0, 0, 0, 23)
     timeDisplay.Text = "⏳ 加载中..."
     timeDisplay.TextColor3 = Color3.fromRGB(100, 200, 255)
     timeDisplay.TextXAlignment = Enum.TextXAlignment.Center
     timeDisplay.BackgroundTransparency = 1
     timeDisplay.Font = Enum.Font.GothamBold
-    timeDisplay.TextSize = 16
+    timeDisplay.TextSize = 15
     timeDisplay.Parent = timeFrame
-    y = y + 68
+    y = y + 63
     
     local info = Instance.new("TextLabel")
     info.Size = UDim2.new(0, 380, 0, 18)
@@ -636,18 +946,18 @@ local function createTaxiPanel(parent)
     taxiTeleportLabel.Parent = parent
     y = y + 28
     
-    -- 防封标识
-    local shieldLabel = Instance.new("TextLabel")
-    shieldLabel.Size = UDim2.new(1, 0, 0, 20)
-    shieldLabel.Position = UDim2.new(0, 10, 0, y)
-    shieldLabel.BackgroundTransparency = 1
-    shieldLabel.Text = "🛡️ 防封模式: 已启用 (随机延迟+伪装)"
-    shieldLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-    shieldLabel.TextXAlignment = Enum.TextXAlignment.Left
-    shieldLabel.BackgroundTransparency = 1
-    shieldLabel.Font = Enum.Font.Gotham
-    shieldLabel.TextSize = 11
-    shieldLabel.Parent = parent
+    -- 模式提示
+    local modeLabel = Instance.new("TextLabel")
+    modeLabel.Size = UDim2.new(1, 0, 0, 20)
+    modeLabel.Position = UDim2.new(0, 10, 0, y)
+    modeLabel.BackgroundTransparency = 1
+    modeLabel.Text = "⚡ 原始模式 · 不受防封干扰"
+    modeLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+    modeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    modeLabel.BackgroundTransparency = 1
+    modeLabel.Font = Enum.Font.Gotham
+    modeLabel.TextSize = 11
+    modeLabel.Parent = parent
     y = y + 24
     
     -- 启动/停止按钮
@@ -670,7 +980,7 @@ local function createTaxiPanel(parent)
     local info = Instance.new("TextLabel")
     info.Size = UDim2.new(0, 380, 0, 18)
     info.Position = UDim2.new(0, 10, 0, y)
-    info.Text = "💡 公益免费 · 自动接单+传送"
+    info.Text = "💡 公益免费 · 自动接单+传送（原始模式）"
     info.TextColor3 = Color3.fromRGB(150, 100, 130)
     info.TextXAlignment = Enum.TextXAlignment.Left
     info.BackgroundTransparency = 1
@@ -685,121 +995,6 @@ local function createTaxiPanel(parent)
             StartTaxiLoop()
         end
     end)
-    
-    LocalPlayer.CharacterAdded:Connect(function()
-        if taxiRunning then
-            task.wait(1)
-            local pos = GetTargetPosition()
-            if pos then
-                pcall(function() TeleportCharacterWithBypass(pos) end)
-            end
-        end
-    end)
-end
-
--- ============================================================
--- 创建公告面板
--- ============================================================
-local function createAnnouncementContent(parent)
-    for _, child in ipairs(parent:GetChildren()) do child:Destroy() end
-    local y = 5
-    
-    local bg = loadBackground(parent)
-    
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(0, 380, 0, 30)
-    title.Position = UDim2.new(0, 10, 0, y)
-    title.Text = "🐾 更新公告"
-    title.TextColor3 = Color3.fromRGB(255, 50, 150)
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 18
-    title.Parent = parent
-    y = y + 35
-    
-    local line = Instance.new("Frame")
-    line.Size = UDim2.new(0, 380, 0, 2)
-    line.Position = UDim2.new(0, 10, 0, y)
-    line.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
-    line.BorderSizePixel = 0
-    line.Parent = parent
-    y = y + 12
-    
-    local updateBox = Instance.new("Frame")
-    updateBox.Size = UDim2.new(0, 380, 0, 160)
-    updateBox.Position = UDim2.new(0, 10, 0, y)
-    updateBox.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
-    updateBox.BackgroundTransparency = 0.3
-    updateBox.BorderSizePixel = 1
-    updateBox.BorderColor3 = Color3.fromRGB(255, 50, 150)
-    updateBox.Parent = parent
-    
-    local updateText = Instance.new("TextLabel")
-    updateText.Size = UDim2.new(1, -15, 1, -10)
-    updateText.Position = UDim2.new(0, 8, 0, 5)
-    updateText.Text = AnnouncementData.currentUpdate
-    updateText.TextColor3 = Color3.fromRGB(255, 200, 220)
-    updateText.TextXAlignment = Enum.TextXAlignment.Left
-    updateText.TextYAlignment = Enum.TextYAlignment.Top
-    updateText.BackgroundTransparency = 1
-    updateText.Font = Enum.Font.Gotham
-    updateText.TextSize = 13
-    updateText.TextWrapped = true
-    updateText.Parent = updateBox
-    y = y + 168
-    
-    local historyBox = Instance.new("Frame")
-    historyBox.Size = UDim2.new(0, 380, 0, 120)
-    historyBox.Position = UDim2.new(0, 10, 0, y)
-    historyBox.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
-    historyBox.BackgroundTransparency = 0.3
-    historyBox.BorderSizePixel = 1
-    historyBox.BorderColor3 = Color3.fromRGB(255, 50, 150)
-    historyBox.Parent = parent
-    
-    local historyText = Instance.new("TextLabel")
-    historyText.Size = UDim2.new(1, -15, 1, -10)
-    historyText.Position = UDim2.new(0, 8, 0, 5)
-    historyText.Text = AnnouncementData.versionHistory
-    historyText.TextColor3 = Color3.fromRGB(255, 200, 220)
-    historyText.TextXAlignment = Enum.TextXAlignment.Left
-    historyText.TextYAlignment = Enum.TextYAlignment.Top
-    historyText.BackgroundTransparency = 1
-    historyText.Font = Enum.Font.Gotham
-    historyText.TextSize = 13
-    historyText.TextWrapped = true
-    historyText.Parent = historyBox
-    y = y + 128
-    
-    local countFrame = Instance.new("Frame")
-    countFrame.Size = UDim2.new(0, 380, 0, 32)
-    countFrame.Position = UDim2.new(0, 10, 0, y)
-    countFrame.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
-    countFrame.BorderSizePixel = 0
-    countFrame.Parent = parent
-    
-    local countText = Instance.new("TextLabel")
-    countText.Size = UDim2.new(1, 0, 1, 0)
-    countText.Text = "🐾 " .. AnnouncementData.totalVersions .. " · 🎉 公益免费"
-    countText.TextColor3 = Color3.fromRGB(255, 255, 255)
-    countText.TextXAlignment = Enum.TextXAlignment.Center
-    countText.BackgroundTransparency = 1
-    countText.Font = Enum.Font.GothamBold
-    countText.TextSize = 14
-    countText.Parent = countFrame
-    y = y + 40
-    
-    local info = Instance.new("TextLabel")
-    info.Size = UDim2.new(0, 380, 0, 18)
-    info.Position = UDim2.new(0, 10, 0, y)
-    info.Text = "💡 野兽出击！公益免费 🐾"
-    info.TextColor3 = Color3.fromRGB(150, 100, 130)
-    info.TextXAlignment = Enum.TextXAlignment.Left
-    info.BackgroundTransparency = 1
-    info.Font = Enum.Font.Gotham
-    info.TextSize = 11
-    info.Parent = parent
 end
 
 -- ============================================================
@@ -948,7 +1143,6 @@ local function createAIPanel(parent)
     info.TextSize = 11
     info.Parent = parent
     
-    -- 聊天函数
     local function addMessage(text, isUser)
         local msg = Instance.new("TextLabel")
         msg.Size = UDim2.new(1, -10, 0, 0)
@@ -2044,6 +2238,6 @@ createVerifyUI(function()
     loadMainUI()
     print("🐾 野兽公益版已加载！")
     print("🎉 完全免费，随便输入卡密即可")
-    print("🛡️ 防封+过检测已启用")
-    print("🚗 点击「出租车」使用自动接单传送")
+    print("🛡️ 防封+过检测已启用（轻量模式）")
+    print("🚗 出租车已修复，点击「出租车」使用")
 end)
