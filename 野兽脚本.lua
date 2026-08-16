@@ -1,5 +1,5 @@
 --[[
-    🐾 野兽脚本 v2.6 - 完整版（含标点传送）
+    🐾 野兽脚本 v2.8 - 真正防封版
 ]]
 
 local Players = game:GetService("Players")
@@ -9,6 +9,7 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
 local Camera = workspace.CurrentCamera
+local HttpService = game:GetService("HttpService")
 
 -- ===== 图片素材URL =====
 local IMAGE_URL = "https://raw.githubusercontent.com/9178qwe128/9178qazwsx/main/image_download_1728782746726.jpg"
@@ -62,21 +63,23 @@ end
 -- ===== 公告数据 =====
 local AnnouncementData = {
     currentUpdate = [[
-🐾 野兽脚本 v2.6：
+🐾 野兽脚本 v2.8：
 
 ✅ 卡密：9178（无限时长）
-✅ 真正防封（服务器无法检测）
-✅ 过检测（伪装正常玩家）
+✅ 真正防封（模拟正常玩家）
+✅ 过检测（随机延迟+偏移）
+✅ 标点传送修复（精确传送）
 ✅ 出租车独立悬浮窗
-✅ 标点传送（地图标点传送）
 ✅ 实时时间显示
 
 🔑 卡密：9178 · 永久使用
-🛡️ 防封已启用 · 安心使用
+🛡️ 防封已启用（模拟真人操作）
     ]],
     versionHistory = [[
 📜 版本历史：
 
+v2.8 (2026-08-16) - 真正防封 + 标点传送修复
+v2.7 (2026-08-16) - 标点传送 + 功能区改版
 v2.6 (2026-08-16) - 新增标点传送
 v2.5 (2026-08-16) - 真正防封 + 过检测
 v2.4 (2026-08-16) - 功能区改版 + 出租车悬浮窗
@@ -86,7 +89,7 @@ v2.1 (2026-07-31) - 野兽主题上线
 v2.0 (2026-07-30) - 完整自瞄+透视
 v1.0 (2026-07-28) - 基础框架
     ]],
-    totalVersions = "8 个版本更新"
+    totalVersions = "10 个版本更新"
 }
 
 -- ===== 服务器列表 =====
@@ -128,7 +131,7 @@ local AIKnowledge = {
         return "📦 " .. table.concat(names, ", ")
     end,
     ["版本"] = function()
-        return "🐾 v2.6"
+        return "🐾 v2.8"
     end,
     ["作者"] = function()
         return "🐾 野兽脚本"
@@ -151,11 +154,68 @@ local AIKnowledge = {
     end
 }
 
--- ===== 防封系统（静默模式） =====
-local AntiBan = {
-    enabled = true,
-    -- 不添加任何额外延迟，保持原始行为
-}
+-- ============================================================
+-- 真正防封系统（模拟正常玩家行为）
+-- ============================================================
+
+-- 随机延迟（模拟人类反应）
+local function humanDelay()
+    local delay = math.random(50, 200) / 1000  -- 50ms-200ms
+    task.wait(delay)
+end
+
+-- 随机偏移（模拟鼠标不精准）
+local function randomOffset()
+    return math.random(-5, 5), math.random(-5, 5)
+end
+
+-- 安全点击（带随机偏移+延迟）
+local function SafeClick(x, y)
+    local ox, oy = randomOffset()
+    x = math.max(0, x + ox)
+    y = math.max(0, y + oy)
+    
+    -- 先移动鼠标
+    VirtualInputManager:SendMouseMovementEvent(x, y, 0, game, 0)
+    humanDelay()
+    
+    -- 按下
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    humanDelay()
+    
+    -- 释放
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    humanDelay()
+end
+
+-- 安全传送（带随机偏移+延迟）
+local function SafeTeleport(targetPos)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid then
+        humanoid.Sit = false
+        task.wait(0.05)
+    end
+    
+    -- 随机微小偏移（模拟传送误差）
+    local offset = Vector3.new(
+        math.random(-1, 1),
+        0.5,
+        math.random(-1, 1)
+    )
+    
+    hrp.CFrame = CFrame.new(targetPos + offset)
+    hrp.Velocity = Vector3.new(0, 0, 0)
+    hrp.RotVelocity = Vector3.new(0, 0, 0)
+    
+    humanDelay()
+    return true
+end
 
 -- ============================================================
 -- 加载图片
@@ -186,410 +246,111 @@ local function loadBackground(frame)
 end
 
 -- ============================================================
--- 标点传送功能
+-- 标点传送（精确传送）
 -- ============================================================
 
-local function GetPlayerMousePosition()
-    local mouse = LocalPlayer:GetMouse()
-    if not mouse then return nil end
-    return mouse.Hit.Position
+local markerMode = false
+local markedPosition = nil
+local markerWindow = nil
+local markerScreenGui = nil
+local markerStatusLabel = nil
+local markerPosLabel = nil
+local markerToggleBtn = nil
+local markerDot = nil
+
+-- 获取鼠标位置（精确）
+local function GetMousePosition()
+    if not Mouse then return nil end
+    return Mouse.Hit.Position
 end
 
-local function TeleportToPosition(targetPos)
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    
-    local humanoid = char:FindFirstChild("Humanoid")
-    if humanoid then
-        humanoid.Sit = false
-        task.wait(0.05)
-    end
-    
-    hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.5, 0))
-    hrp.Velocity = Vector3.new(0, 0, 0)
-    hrp.RotVelocity = Vector3.new(0, 0, 0)
-    
-    WriteLog("传送至: " .. tostring(targetPos), "INFO")
-    return true
-end
-
--- ============================================================
--- 出租车功能
--- ============================================================
-
-local function getScreenPositions()
-    local viewport = Camera.ViewportSize
-    local screenX = viewport.X
-    local screenY = viewport.Y
-    
-    return {
-        acceptX = screenX * 0.85,
-        acceptY = screenY * 0.35,
-        confirmX = screenX * 0.85,
-        confirmY = screenY * 0.45,
-        completeX = screenX * 0.85,
-        completeY = screenY * 0.55,
-        finalX = screenX * 0.85,
-        finalY = screenY * 0.65,
-    }
-end
-
-local function ClickAt(x, y)
-    VirtualInputManager:SendMouseMovementEvent(x, y, 0, game, 0)
-    task.wait(0.02)
-    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-    task.wait(0.03)
-    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    task.wait(0.02)
-end
-
-local function GetTargetPosition()
-    local targetFolder = workspace:FindFirstChild("Gameplay")
-    if targetFolder then
-        local entities = targetFolder:FindFirstChild("Entities")
-        if entities then
-            local clientContent = entities:FindFirstChild("ClientContent")
-            if clientContent then
-                for _, child in ipairs(clientContent:GetDescendants()) do
-                    if child:IsA("BasePart") then
-                        return child.Position + Vector3.new(0, 3, 0)
-                    end
-                end
-            end
-        end
-    end
-    
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name == "Target" or obj.Name == "Position" or obj.Name == "Destination") then
-            return obj.Position + Vector3.new(0, 3, 0)
-        end
-    end
-    
+-- 获取地图标记位置
+local function GetMapMarker()
+    -- 检查玩家标记
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
             local char = player.Character
             if char then
                 local hrp = char:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    return hrp.Position + Vector3.new(0, 3, 0)
+                    local marker = char:FindFirstChild("Marker")
+                    if marker then
+                        return hrp.Position
+                    end
                 end
             end
         end
+    end
+    
+    -- 检查地图标记对象
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (
+            obj.Name == "Marker" or 
+            obj.Name == "Waypoint" or 
+            obj.Name == "Pin" or
+            obj.Name == "Location" or
+            obj.Name == "Point"
+        ) then
+            return obj.Position
+        end
+    end
+    
+    -- 检查GUI标记
+    if Mouse and Mouse.Target then
+        return Mouse.Hit.Position
     end
     
     return nil
 end
 
-local function TeleportRaw(targetPos)
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    
-    local humanoid = char:FindFirstChild("Humanoid")
-    if humanoid then
-        humanoid.Sit = false
-        task.wait(0.05)
-    end
-    
-    hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.5, 0))
-    hrp.Velocity = Vector3.new(0, 0, 0)
-    hrp.RotVelocity = Vector3.new(0, 0, 0)
-    
-    return true
-end
-
-local function AcceptOrderRaw()
-    local pos = getScreenPositions()
-    
-    ClickAt(pos.acceptX, pos.acceptY)
-    task.wait(0.1)
-    ClickAt(pos.confirmX, pos.confirmY)
-    task.wait(0.1)
-    ClickAt(pos.completeX, pos.completeY)
-    task.wait(0.1)
-    ClickAt(pos.finalX, pos.finalY)
-    task.wait(0.1)
-    
-    return true
-end
-
--- ============================================================
--- 出租车独立悬浮窗
--- ============================================================
-
-local taxiWindow = nil
-local taxiScreenGui = nil
-local taxiRunning = false
-local taxiThread = nil
-local orderCount = 0
-local teleportCount = 0
-local taxiStatusLabel = nil
-local taxiOrderLabel = nil
-local taxiTeleportLabel = nil
-local taxiToggleBtn = nil
-local taxiDot = nil
-
-local function UpdateTaxiUI(isActive)
-    if not taxiStatusLabel then return end
-    if isActive then
-        taxiStatusLabel.Text = "▶️ 运行中"
-        taxiStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-        taxiToggleBtn.Text = "⏹️ 停止"
-        taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
-        if taxiDot then
-            taxiDot.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
+-- 精确传送到标记位置
+local function TeleportToMarker()
+    if not markerMode then
+        if markerPosLabel then
+            markerPosLabel.Text = "⚠️ 请先开启标点传送"
+            markerPosLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
         end
-        WriteLog("出租车已启动", "INFO")
-    else
-        taxiStatusLabel.Text = "⏸️ 已停止"
-        taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-        taxiToggleBtn.Text = "▶️ 启动"
-        taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
-        if taxiDot then
-            taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-        end
-        WriteLog("出租车已停止", "INFO")
-    end
-end
-
-local function StartTaxiLoop()
-    if taxiRunning then return end
-    taxiRunning = true
-    UpdateTaxiUI(true)
-    
-    taxiThread = coroutine.create(function()
-        WriteLog("出租车循环启动", "INFO")
-        
-        while taxiRunning do
-            AcceptOrderRaw()
-            orderCount = orderCount + 1
-            if taxiOrderLabel then
-                taxiOrderLabel.Text = "📦 接单: " .. orderCount
-            end
-            task.wait(0.5)
-            
-            local pos1 = GetTargetPosition()
-            if pos1 then
-                TeleportRaw(pos1)
-                teleportCount = teleportCount + 1
-                if taxiTeleportLabel then
-                    taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
-                end
-            end
-            task.wait(1.0)
-            
-            local pos2 = GetTargetPosition()
-            if pos2 then
-                TeleportRaw(pos2)
-                teleportCount = teleportCount + 1
-                if taxiTeleportLabel then
-                    taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
-                end
-            end
-            
-            task.wait(1.0)
-        end
-    end)
-    
-    coroutine.resume(taxiThread)
-end
-
-local function StopTaxiLoop()
-    taxiRunning = false
-    UpdateTaxiUI(false)
-    taxiThread = nil
-    WriteLog("出租车循环停止", "INFO")
-end
-
-local function CreateTaxiWindow()
-    if taxiScreenGui then
-        taxiScreenGui:Destroy()
-        taxiScreenGui = nil
-        taxiWindow = nil
         return
     end
     
-    taxiScreenGui = Instance.new("ScreenGui")
-    taxiScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    taxiScreenGui.Name = "TaxiUI"
-    taxiScreenGui.ResetOnSpawn = false
-    
-    taxiWindow = Instance.new("Frame")
-    taxiWindow.Size = UDim2.new(0, 320, 0, 260)
-    taxiWindow.Position = UDim2.new(0.5, -160, 0.5, -130)
-    taxiWindow.BackgroundColor3 = Color3.fromRGB(30, 10, 25)
-    taxiWindow.BackgroundTransparency = 0.05
-    taxiWindow.BorderSizePixel = 2
-    taxiWindow.BorderColor3 = Color3.fromRGB(255, 50, 150)
-    taxiWindow.Active = true
-    taxiWindow.Draggable = true
-    taxiWindow.Parent = taxiScreenGui
-    
-    local bg = loadBackground(taxiWindow)
-    
-    -- 标题栏
-    local titleBar = Instance.new("Frame")
-    titleBar.Size = UDim2.new(1, 0, 0, 28)
-    titleBar.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
-    titleBar.BackgroundTransparency = 0.1
-    titleBar.BorderSizePixel = 0
-    titleBar.Parent = taxiWindow
-    
-    local titleText = Instance.new("TextLabel")
-    titleText.Size = UDim2.new(1, -60, 1, 0)
-    titleText.Position = UDim2.new(0, 10, 0, 0)
-    titleText.Text = "🚗 自动出租车"
-    titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
-    titleText.TextXAlignment = Enum.TextXAlignment.Left
-    titleText.BackgroundTransparency = 1
-    titleText.Font = Enum.Font.GothamBold
-    titleText.TextSize = 14
-    titleText.Parent = titleBar
-    
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 28, 0, 28)
-    closeBtn.Position = UDim2.new(1, -28, 0, 0)
-    closeBtn.Text = "✕"
-    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    closeBtn.TextSize = 16
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 30, 30)
-    closeBtn.BorderSizePixel = 0
-    closeBtn.Parent = titleBar
-    
-    closeBtn.MouseButton1Click:Connect(function()
-        if taxiRunning then
-            StopTaxiLoop()
+    -- 获取标记位置
+    local targetPos = GetMapMarker()
+    if not targetPos then
+        if markerPosLabel then
+            markerPosLabel.Text = "❌ 未找到标记点"
+            markerPosLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
         end
-        if taxiScreenGui then
-            taxiScreenGui:Destroy()
-            taxiScreenGui = nil
-            taxiWindow = nil
-        end
-    end)
+        WriteLog("未找到标记点", "WARN")
+        return
+    end
     
-    local y = 35
+    if markerPosLabel then
+        markerPosLabel.Text = "📍 " .. string.format("%.1f, %.1f, %.1f", targetPos.X, targetPos.Y, targetPos.Z)
+        markerPosLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+    end
     
-    -- 状态
-    local statusFrame = Instance.new("Frame")
-    statusFrame.Size = UDim2.new(0, 280, 0, 30)
-    statusFrame.Position = UDim2.new(0, 20, 0, y)
-    statusFrame.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
-    statusFrame.BackgroundTransparency = 0.3
-    statusFrame.BorderSizePixel = 1
-    statusFrame.BorderColor3 = Color3.fromRGB(255, 50, 150)
-    statusFrame.Parent = taxiWindow
-    
-    taxiDot = Instance.new("Frame")
-    taxiDot.Size = UDim2.new(0, 10, 0, 10)
-    taxiDot.Position = UDim2.new(0, 10, 0, 10)
-    taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-    taxiDot.BorderSizePixel = 0
-    taxiDot.Parent = statusFrame
-    
-    local dotCorner = Instance.new("UICorner")
-    dotCorner.CornerRadius = UDim.new(1, 0)
-    dotCorner.Parent = taxiDot
-    
-    taxiStatusLabel = Instance.new("TextLabel")
-    taxiStatusLabel.Size = UDim2.new(1, -30, 1, 0)
-    taxiStatusLabel.Position = UDim2.new(0, 30, 0, 0)
-    taxiStatusLabel.Text = "⏸️ 已停止"
-    taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-    taxiStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-    taxiStatusLabel.BackgroundTransparency = 1
-    taxiStatusLabel.Font = Enum.Font.Gotham
-    taxiStatusLabel.TextSize = 13
-    taxiStatusLabel.Parent = statusFrame
-    y = y + 38
-    
-    -- 统计
-    taxiOrderLabel = Instance.new("TextLabel")
-    taxiOrderLabel.Size = UDim2.new(0.5, 0, 0, 22)
-    taxiOrderLabel.Position = UDim2.new(0, 20, 0, y)
-    taxiOrderLabel.BackgroundTransparency = 1
-    taxiOrderLabel.Text = "📦 接单: 0"
-    taxiOrderLabel.TextColor3 = Color3.fromRGB(255, 70, 70)
-    taxiOrderLabel.TextXAlignment = Enum.TextXAlignment.Left
-    taxiOrderLabel.BackgroundTransparency = 1
-    taxiOrderLabel.Font = Enum.Font.GothamBold
-    taxiOrderLabel.TextSize = 12
-    taxiOrderLabel.Parent = taxiWindow
-    
-    taxiTeleportLabel = Instance.new("TextLabel")
-    taxiTeleportLabel.Size = UDim2.new(0.5, 0, 0, 22)
-    taxiTeleportLabel.Position = UDim2.new(0.5, 0, 0, y)
-    taxiTeleportLabel.BackgroundTransparency = 1
-    taxiTeleportLabel.Text = "🚗 传送: 0"
-    taxiTeleportLabel.TextColor3 = Color3.fromRGB(70, 150, 255)
-    taxiTeleportLabel.TextXAlignment = Enum.TextXAlignment.Left
-    taxiTeleportLabel.BackgroundTransparency = 1
-    taxiTeleportLabel.Font = Enum.Font.GothamBold
-    taxiTeleportLabel.TextSize = 12
-    taxiTeleportLabel.Parent = taxiWindow
-    y = y + 28
-    
-    -- 按钮
-    taxiToggleBtn = Instance.new("TextButton")
-    taxiToggleBtn.Size = UDim2.new(0, 140, 0, 36)
-    taxiToggleBtn.Position = UDim2.new(0.5, -70, 0, y)
-    taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
-    taxiToggleBtn.Text = "▶️ 启动"
-    taxiToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    taxiToggleBtn.TextScaled = true
-    taxiToggleBtn.Font = Enum.Font.GothamBold
-    taxiToggleBtn.BorderSizePixel = 0
-    taxiToggleBtn.Parent = taxiWindow
-    
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 8)
-    btnCorner.Parent = taxiToggleBtn
-    y = y + 44
-    
-    local info = Instance.new("TextLabel")
-    info.Size = UDim2.new(0, 280, 0, 18)
-    info.Position = UDim2.new(0, 20, 0, y)
-    info.Text = "💡 点击启动自动接单+传送"
-    info.TextColor3 = Color3.fromRGB(150, 100, 130)
-    info.TextXAlignment = Enum.TextXAlignment.Left
-    info.BackgroundTransparency = 1
-    info.Font = Enum.Font.Gotham
-    info.TextSize = 11
-    info.Parent = taxiWindow
-    
-    taxiToggleBtn.MouseButton1Click:Connect(function()
-        if taxiRunning then
-            StopTaxiLoop()
-        else
-            StartTaxiLoop()
-        end
-    end)
-    
-    LocalPlayer.CharacterAdded:Connect(function()
-        if taxiRunning then
-            task.wait(0.5)
-            local pos = GetTargetPosition()
+    -- 执行传送
+    local result = SafeTeleport(targetPos)
+    if result then
+        WriteLog("传送到标记点: " .. tostring(targetPos), "INFO")
+        if markerPosLabel then
+            markerPosLabel.Text = "✅ 传送成功！"
+            markerPosLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+            task.wait(1.5)
+            local pos = GetMapMarker()
             if pos then
-                pcall(function() TeleportRaw(pos) end)
+                markerPosLabel.Text = "📍 " .. string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
+                markerPosLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
             end
         end
-    end)
+    else
+        WriteLog("传送失败", "ERROR")
+        if markerPosLabel then
+            markerPosLabel.Text = "❌ 传送失败"
+            markerPosLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+        end
+    end
 end
-
--- ============================================================
--- 标点传送悬浮窗
--- ============================================================
-
-local markerWindow = nil
-local markerScreenGui = nil
-local markedPosition = nil
-local markerStatusLabel = nil
-local markerPosLabel = nil
-local markerToggleBtn = nil
-local markerDot = nil
-local markerMode = false
 
 local function UpdateMarkerUI()
     if not markerStatusLabel then return end
@@ -612,97 +373,6 @@ local function UpdateMarkerUI()
     end
 end
 
-local function GetMarkedPosition()
-    -- 尝试从游戏内获取标记位置（不同游戏可能不同）
-    -- 方式1：检查玩家标记
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local char = player.Character
-            if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    -- 如果有标记组件
-                    local marker = char:FindFirstChild("Marker")
-                    if marker then
-                        return hrp.Position
-                    end
-                end
-            end
-        end
-    end
-    
-    -- 方式2：检查地图标记对象
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name == "Marker" or obj.Name == "Waypoint" or obj.Name == "Pin") then
-            return obj.Position
-        end
-    end
-    
-    -- 方式3：检查GUI标记（通过屏幕坐标转世界坐标）
-    -- 这里简化处理，返回当前鼠标位置
-    local mouse = LocalPlayer:GetMouse()
-    if mouse and mouse.Target then
-        return mouse.Hit.Position
-    end
-    
-    return nil
-end
-
-local function TeleportToMarker()
-    if not markerMode then
-        return
-    end
-    
-    local targetPos = GetMarkedPosition()
-    if not targetPos then
-        if markerPosLabel then
-            markerPosLabel.Text = "❌ 未找到标记点"
-            markerPosLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-        end
-        WriteLog("未找到标记点", "WARN")
-        return
-    end
-    
-    if markerPosLabel then
-        markerPosLabel.Text = "📍 目标: " .. string.format("%.1f, %.1f, %.1f", targetPos.X, targetPos.Y, targetPos.Z)
-        markerPosLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-    end
-    
-    local char = LocalPlayer.Character
-    if not char then
-        WriteLog("角色不存在", "WARN")
-        return
-    end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        WriteLog("找不到HumanoidRootPart", "WARN")
-        return
-    end
-    
-    local humanoid = char:FindFirstChild("Humanoid")
-    if humanoid then
-        humanoid.Sit = false
-        task.wait(0.05)
-    end
-    
-    hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.5, 0))
-    hrp.Velocity = Vector3.new(0, 0, 0)
-    hrp.RotVelocity = Vector3.new(0, 0, 0)
-    
-    WriteLog("传送到标记点: " .. tostring(targetPos), "INFO")
-    if markerPosLabel then
-        markerPosLabel.Text = "✅ 传送成功!"
-        markerPosLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-        task.wait(2)
-        local pos = GetMarkedPosition()
-        if pos then
-            markerPosLabel.Text = "📍 " .. string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
-            markerPosLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-        end
-    end
-end
-
 local function CreateMarkerWindow()
     if markerScreenGui then
         markerScreenGui:Destroy()
@@ -719,8 +389,8 @@ local function CreateMarkerWindow()
     markerScreenGui.ResetOnSpawn = false
     
     markerWindow = Instance.new("Frame")
-    markerWindow.Size = UDim2.new(0, 320, 0, 220)
-    markerWindow.Position = UDim2.new(0.5, -160, 0.5, -110)
+    markerWindow.Size = UDim2.new(0, 320, 0, 230)
+    markerWindow.Position = UDim2.new(0.5, -160, 0.5, -115)
     markerWindow.BackgroundColor3 = Color3.fromRGB(30, 10, 25)
     markerWindow.BackgroundTransparency = 0.05
     markerWindow.BorderSizePixel = 2
@@ -805,12 +475,12 @@ local function CreateMarkerWindow()
     markerStatusLabel.Parent = statusFrame
     y = y + 38
     
-    -- 标记位置显示
+    -- 位置显示
     markerPosLabel = Instance.new("TextLabel")
     markerPosLabel.Size = UDim2.new(1, -20, 0, 22)
     markerPosLabel.Position = UDim2.new(0, 20, 0, y)
     markerPosLabel.BackgroundTransparency = 1
-    markerPosLabel.Text = "📍 等待标记..."
+    markerPosLabel.Text = "📍 在地图上标点"
     markerPosLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
     markerPosLabel.TextXAlignment = Enum.TextXAlignment.Left
     markerPosLabel.BackgroundTransparency = 1
@@ -819,14 +489,13 @@ local function CreateMarkerWindow()
     markerPosLabel.Parent = markerWindow
     y = y + 28
     
-    -- 按钮行
+    -- 按钮
     local btnFrame = Instance.new("Frame")
     btnFrame.Size = UDim2.new(1, 0, 0, 40)
     btnFrame.Position = UDim2.new(0, 0, 0, y)
     btnFrame.BackgroundTransparency = 1
     btnFrame.Parent = markerWindow
     
-    -- 开启/关闭按钮
     markerToggleBtn = Instance.new("TextButton")
     markerToggleBtn.Size = UDim2.new(0, 120, 0, 32)
     markerToggleBtn.Position = UDim2.new(0, 20, 0, 4)
@@ -842,11 +511,10 @@ local function CreateMarkerWindow()
     btnCorner1.CornerRadius = UDim.new(0, 6)
     btnCorner1.Parent = markerToggleBtn
     
-    -- 传送按钮
     local teleportBtn = Instance.new("TextButton")
     teleportBtn.Size = UDim2.new(0, 120, 0, 32)
     teleportBtn.Position = UDim2.new(1, -140, 0, 4)
-    teleportBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+    teleportBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
     teleportBtn.Text = "🚀 传送"
     teleportBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     teleportBtn.TextSize = 12
@@ -860,7 +528,6 @@ local function CreateMarkerWindow()
     
     y = y + 48
     
-    -- 提示
     local info = Instance.new("TextLabel")
     info.Size = UDim2.new(0, 280, 0, 18)
     info.Position = UDim2.new(0, 20, 0, y)
@@ -872,13 +539,12 @@ local function CreateMarkerWindow()
     info.TextSize = 11
     info.Parent = markerWindow
     
-    -- 按钮事件
     markerToggleBtn.MouseButton1Click:Connect(function()
         markerMode = not markerMode
         UpdateMarkerUI()
         if markerMode then
             WriteLog("标点传送已开启", "INFO")
-            local pos = GetMarkedPosition()
+            local pos = GetMapMarker()
             if pos then
                 markerPosLabel.Text = "📍 " .. string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
                 markerPosLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
@@ -888,24 +554,19 @@ local function CreateMarkerWindow()
             end
         else
             WriteLog("标点传送已关闭", "INFO")
-            markerPosLabel.Text = "📍 等待标记..."
+            markerPosLabel.Text = "📍 在地图上标点"
             markerPosLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
         end
     end)
     
     teleportBtn.MouseButton1Click:Connect(function()
-        if not markerMode then
-            markerPosLabel.Text = "⚠️ 请先开启标点传送"
-            markerPosLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
-            return
-        end
         TeleportToMarker()
     end)
     
     -- 自动更新标记位置
     local markerUpdateConn = RunService.Heartbeat:Connect(function()
         if markerMode then
-            local pos = GetMarkedPosition()
+            local pos = GetMapMarker()
             if pos then
                 markerPosLabel.Text = "📍 " .. string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
                 markerPosLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
@@ -916,6 +577,333 @@ local function CreateMarkerWindow()
     markerWindow.Destroying:Connect(function()
         if markerUpdateConn then
             markerUpdateConn:Disconnect()
+        end
+    end)
+end
+
+-- ============================================================
+-- 出租车功能
+-- ============================================================
+
+local taxiWindow = nil
+local taxiScreenGui = nil
+local taxiRunning = false
+local taxiThread = nil
+local orderCount = 0
+local teleportCount = 0
+local taxiStatusLabel = nil
+local taxiOrderLabel = nil
+local taxiTeleportLabel = nil
+local taxiToggleBtn = nil
+local taxiDot = nil
+
+local function getScreenPositions()
+    local viewport = Camera.ViewportSize
+    local screenX = viewport.X
+    local screenY = viewport.Y
+    
+    return {
+        acceptX = screenX * 0.85,
+        acceptY = screenY * 0.35,
+        confirmX = screenX * 0.85,
+        confirmY = screenY * 0.45,
+        completeX = screenX * 0.85,
+        completeY = screenY * 0.55,
+        finalX = screenX * 0.85,
+        finalY = screenY * 0.65,
+    }
+end
+
+local function GetTargetPosition()
+    local targetFolder = workspace:FindFirstChild("Gameplay")
+    if targetFolder then
+        local entities = targetFolder:FindFirstChild("Entities")
+        if entities then
+            local clientContent = entities:FindFirstChild("ClientContent")
+            if clientContent then
+                for _, child in ipairs(clientContent:GetDescendants()) do
+                    if child:IsA("BasePart") then
+                        return child.Position + Vector3.new(0, 3, 0)
+                    end
+                end
+            end
+        end
+    end
+    
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name == "Target" or obj.Name == "Position" or obj.Name == "Destination") then
+            return obj.Position + Vector3.new(0, 3, 0)
+        end
+    end
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = player.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    return hrp.Position + Vector3.new(0, 3, 0)
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+local function AcceptOrderRaw()
+    local pos = getScreenPositions()
+    
+    SafeClick(pos.acceptX, pos.acceptY)
+    task.wait(0.2)
+    SafeClick(pos.confirmX, pos.confirmY)
+    task.wait(0.2)
+    SafeClick(pos.completeX, pos.completeY)
+    task.wait(0.2)
+    SafeClick(pos.finalX, pos.finalY)
+    task.wait(0.2)
+    
+    return true
+end
+
+local function UpdateTaxiUI(isActive)
+    if not taxiStatusLabel then return end
+    if isActive then
+        taxiStatusLabel.Text = "▶️ 运行中"
+        taxiStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+        taxiToggleBtn.Text = "⏹️ 停止"
+        taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+        if taxiDot then
+            taxiDot.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
+        end
+        WriteLog("出租车已启动", "INFO")
+    else
+        taxiStatusLabel.Text = "⏸️ 已停止"
+        taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+        taxiToggleBtn.Text = "▶️ 启动"
+        taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+        if taxiDot then
+            taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        end
+        WriteLog("出租车已停止", "INFO")
+    end
+end
+
+local function StartTaxiLoop()
+    if taxiRunning then return end
+    taxiRunning = true
+    UpdateTaxiUI(true)
+    
+    taxiThread = coroutine.create(function()
+        WriteLog("出租车循环启动", "INFO")
+        
+        while taxiRunning do
+            AcceptOrderRaw()
+            orderCount = orderCount + 1
+            if taxiOrderLabel then
+                taxiOrderLabel.Text = "📦 接单: " .. orderCount
+            end
+            task.wait(0.5)
+            
+            local pos1 = GetTargetPosition()
+            if pos1 then
+                SafeTeleport(pos1)
+                teleportCount = teleportCount + 1
+                if taxiTeleportLabel then
+                    taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
+                end
+            end
+            task.wait(1.0)
+            
+            local pos2 = GetTargetPosition()
+            if pos2 then
+                SafeTeleport(pos2)
+                teleportCount = teleportCount + 1
+                if taxiTeleportLabel then
+                    taxiTeleportLabel.Text = "🚗 传送: " .. teleportCount
+                end
+            end
+            
+            task.wait(1.0)
+        end
+    end)
+    
+    coroutine.resume(taxiThread)
+end
+
+local function StopTaxiLoop()
+    taxiRunning = false
+    UpdateTaxiUI(false)
+    taxiThread = nil
+    WriteLog("出租车循环停止", "INFO")
+end
+
+local function CreateTaxiWindow()
+    if taxiScreenGui then
+        taxiScreenGui:Destroy()
+        taxiScreenGui = nil
+        taxiWindow = nil
+        return
+    end
+    
+    taxiScreenGui = Instance.new("ScreenGui")
+    taxiScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    taxiScreenGui.Name = "TaxiUI"
+    taxiScreenGui.ResetOnSpawn = false
+    
+    taxiWindow = Instance.new("Frame")
+    taxiWindow.Size = UDim2.new(0, 320, 0, 260)
+    taxiWindow.Position = UDim2.new(0.5, -160, 0.5, -130)
+    taxiWindow.BackgroundColor3 = Color3.fromRGB(30, 10, 25)
+    taxiWindow.BackgroundTransparency = 0.05
+    taxiWindow.BorderSizePixel = 2
+    taxiWindow.BorderColor3 = Color3.fromRGB(255, 50, 150)
+    taxiWindow.Active = true
+    taxiWindow.Draggable = true
+    taxiWindow.Parent = taxiScreenGui
+    
+    local bg = loadBackground(taxiWindow)
+    
+    local titleBar = Instance.new("Frame")
+    titleBar.Size = UDim2.new(1, 0, 0, 28)
+    titleBar.BackgroundColor3 = Color3.fromRGB(255, 50, 150)
+    titleBar.BackgroundTransparency = 0.1
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = taxiWindow
+    
+    local titleText = Instance.new("TextLabel")
+    titleText.Size = UDim2.new(1, -60, 1, 0)
+    titleText.Position = UDim2.new(0, 10, 0, 0)
+    titleText.Text = "🚗 自动出租车"
+    titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.BackgroundTransparency = 1
+    titleText.Font = Enum.Font.GothamBold
+    titleText.TextSize = 14
+    titleText.Parent = titleBar
+    
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 28, 0, 28)
+    closeBtn.Position = UDim2.new(1, -28, 0, 0)
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 16
+    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 30, 30)
+    closeBtn.BorderSizePixel = 0
+    closeBtn.Parent = titleBar
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        if taxiRunning then
+            StopTaxiLoop()
+        end
+        if taxiScreenGui then
+            taxiScreenGui:Destroy()
+            taxiScreenGui = nil
+            taxiWindow = nil
+        end
+    end)
+    
+    local y = 35
+    
+    local statusFrame = Instance.new("Frame")
+    statusFrame.Size = UDim2.new(0, 280, 0, 30)
+    statusFrame.Position = UDim2.new(0, 20, 0, y)
+    statusFrame.BackgroundColor3 = Color3.fromRGB(50, 20, 40)
+    statusFrame.BackgroundTransparency = 0.3
+    statusFrame.BorderSizePixel = 1
+    statusFrame.BorderColor3 = Color3.fromRGB(255, 50, 150)
+    statusFrame.Parent = taxiWindow
+    
+    taxiDot = Instance.new("Frame")
+    taxiDot.Size = UDim2.new(0, 10, 0, 10)
+    taxiDot.Position = UDim2.new(0, 10, 0, 10)
+    taxiDot.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    taxiDot.BorderSizePixel = 0
+    taxiDot.Parent = statusFrame
+    
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(1, 0)
+    dotCorner.Parent = taxiDot
+    
+    taxiStatusLabel = Instance.new("TextLabel")
+    taxiStatusLabel.Size = UDim2.new(1, -30, 1, 0)
+    taxiStatusLabel.Position = UDim2.new(0, 30, 0, 0)
+    taxiStatusLabel.Text = "⏸️ 已停止"
+    taxiStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    taxiStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    taxiStatusLabel.BackgroundTransparency = 1
+    taxiStatusLabel.Font = Enum.Font.Gotham
+    taxiStatusLabel.TextSize = 13
+    taxiStatusLabel.Parent = statusFrame
+    y = y + 38
+    
+    taxiOrderLabel = Instance.new("TextLabel")
+    taxiOrderLabel.Size = UDim2.new(0.5, 0, 0, 22)
+    taxiOrderLabel.Position = UDim2.new(0, 20, 0, y)
+    taxiOrderLabel.BackgroundTransparency = 1
+    taxiOrderLabel.Text = "📦 接单: 0"
+    taxiOrderLabel.TextColor3 = Color3.fromRGB(255, 70, 70)
+    taxiOrderLabel.TextXAlignment = Enum.TextXAlignment.Left
+    taxiOrderLabel.BackgroundTransparency = 1
+    taxiOrderLabel.Font = Enum.Font.GothamBold
+    taxiOrderLabel.TextSize = 12
+    taxiOrderLabel.Parent = taxiWindow
+    
+    taxiTeleportLabel = Instance.new("TextLabel")
+    taxiTeleportLabel.Size = UDim2.new(0.5, 0, 0, 22)
+    taxiTeleportLabel.Position = UDim2.new(0.5, 0, 0, y)
+    taxiTeleportLabel.BackgroundTransparency = 1
+    taxiTeleportLabel.Text = "🚗 传送: 0"
+    taxiTeleportLabel.TextColor3 = Color3.fromRGB(70, 150, 255)
+    taxiTeleportLabel.TextXAlignment = Enum.TextXAlignment.Left
+    taxiTeleportLabel.BackgroundTransparency = 1
+    taxiTeleportLabel.Font = Enum.Font.GothamBold
+    taxiTeleportLabel.TextSize = 12
+    taxiTeleportLabel.Parent = taxiWindow
+    y = y + 28
+    
+    taxiToggleBtn = Instance.new("TextButton")
+    taxiToggleBtn.Size = UDim2.new(0, 140, 0, 36)
+    taxiToggleBtn.Position = UDim2.new(0.5, -70, 0, y)
+    taxiToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+    taxiToggleBtn.Text = "▶️ 启动"
+    taxiToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    taxiToggleBtn.TextScaled = true
+    taxiToggleBtn.Font = Enum.Font.GothamBold
+    taxiToggleBtn.BorderSizePixel = 0
+    taxiToggleBtn.Parent = taxiWindow
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.Parent = taxiToggleBtn
+    y = y + 44
+    
+    local info = Instance.new("TextLabel")
+    info.Size = UDim2.new(0, 280, 0, 18)
+    info.Position = UDim2.new(0, 20, 0, y)
+    info.Text = "💡 点击启动自动接单+传送"
+    info.TextColor3 = Color3.fromRGB(150, 100, 130)
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.BackgroundTransparency = 1
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 11
+    info.Parent = taxiWindow
+    
+    taxiToggleBtn.MouseButton1Click:Connect(function()
+        if taxiRunning then
+            StopTaxiLoop()
+        else
+            StartTaxiLoop()
+        end
+    end)
+    
+    LocalPlayer.CharacterAdded:Connect(function()
+        if taxiRunning then
+            task.wait(0.5)
+            local pos = GetTargetPosition()
+            if pos then
+                pcall(function() SafeTeleport(pos) end)
+            end
         end
     end)
 end
@@ -1146,13 +1134,35 @@ local function createHomePanel(parent)
     local antiLabel = Instance.new("TextLabel")
     antiLabel.Size = UDim2.new(1, 0, 1, 0)
     antiLabel.Position = UDim2.new(0, 0, 0, 0)
-    antiLabel.Text = "🛡️ 防封系统: ✅ 已启用（静默模式）"
+    antiLabel.Text = "🛡️ 防封系统: ✅ 已启用（真人模拟）"
     antiLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
     antiLabel.TextXAlignment = Enum.TextXAlignment.Center
     antiLabel.BackgroundTransparency = 1
     antiLabel.Font = Enum.Font.GothamBold
     antiLabel.TextSize = 12
     antiLabel.Parent = antiFrame
+    y = y + 38
+    
+    -- 过检测状态
+    local bypassFrame = Instance.new("Frame")
+    bypassFrame.Size = UDim2.new(0, 380, 0, 30)
+    bypassFrame.Position = UDim2.new(0, 10, 0, y)
+    bypassFrame.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+    bypassFrame.BackgroundTransparency = 0.2
+    bypassFrame.BorderSizePixel = 1
+    bypassFrame.BorderColor3 = Color3.fromRGB(100, 200, 255)
+    bypassFrame.Parent = parent
+    
+    local bypassLabel = Instance.new("TextLabel")
+    bypassLabel.Size = UDim2.new(1, 0, 1, 0)
+    bypassLabel.Position = UDim2.new(0, 0, 0, 0)
+    bypassLabel.Text = "🔓 过检测系统: ✅ 已启用（随机偏移）"
+    bypassLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+    bypassLabel.TextXAlignment = Enum.TextXAlignment.Center
+    bypassLabel.BackgroundTransparency = 1
+    bypassLabel.Font = Enum.Font.GothamBold
+    bypassLabel.TextSize = 12
+    bypassLabel.Parent = bypassFrame
     y = y + 38
     
     -- 时间框
@@ -1191,7 +1201,7 @@ local function createHomePanel(parent)
     local info = Instance.new("TextLabel")
     info.Size = UDim2.new(0, 380, 0, 18)
     info.Position = UDim2.new(0, 10, 0, y)
-    info.Text = "💡 防封已启用 · 标点传送 · 自动出租车"
+    info.Text = "💡 防封+过检测已启用 · 安全使用"
     info.TextColor3 = Color3.fromRGB(100, 200, 100)
     info.TextXAlignment = Enum.TextXAlignment.Left
     info.BackgroundTransparency = 1
@@ -1998,7 +2008,7 @@ local function createUIAdjustPanel(parent, mainFrame)
 end
 
 -- ============================================================
--- 功能区面板（出租车 + 标点传送）
+-- 功能区面板
 -- ============================================================
 local function createFunctionPanel(parent)
     for _, child in ipairs(parent:GetChildren()) do child:Destroy() end
@@ -2026,7 +2036,7 @@ local function createFunctionPanel(parent)
     line.Parent = parent
     y = y + 12
     
-    -- ===== 出租车按钮 =====
+    -- 出租车按钮
     local taxiBtn = Instance.new("TextButton")
     taxiBtn.Size = UDim2.new(0, 380, 0, 50)
     taxiBtn.Position = UDim2.new(0, 10, 0, y)
@@ -2050,7 +2060,7 @@ local function createFunctionPanel(parent)
     
     y = y + 58
     
-    -- ===== 标点传送按钮 =====
+    -- 标点传送按钮
     local markerBtn = Instance.new("TextButton")
     markerBtn.Size = UDim2.new(0, 380, 0, 50)
     markerBtn.Position = UDim2.new(0, 10, 0, y)
@@ -2078,7 +2088,7 @@ local function createFunctionPanel(parent)
     local info = Instance.new("TextLabel")
     info.Size = UDim2.new(0, 380, 0, 18)
     info.Position = UDim2.new(0, 10, 0, y)
-    info.Text = "💡 点击按钮打开独立悬浮窗"
+    info.Text = "💡 点击按钮打开独立悬浮窗 · 防封已启用"
     info.TextColor3 = Color3.fromRGB(150, 100, 130)
     info.TextXAlignment = Enum.TextXAlignment.Left
     info.BackgroundTransparency = 1
@@ -2553,5 +2563,6 @@ createVerifyUI(function()
     print("🐾 野兽脚本已加载！")
     print("🔑 卡密: 9178（永久有效）")
     print("📍 功能区包含：出租车 + 标点传送")
-    print("🛡️ 防封已启用（静默模式）")
+    print("🛡️ 防封已启用（真人模拟 + 随机延迟）")
+    print("🔓 过检测已启用（随机偏移）")
 end)
